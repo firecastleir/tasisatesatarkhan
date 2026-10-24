@@ -346,8 +346,10 @@ def gemini_tts(text, pcm_path, wav_path):
     models = [n for n in list_models() if "tts" in n]
     if not models:
         raise RuntimeError("no gemini tts model available")
-    prompt = ("Read aloud in Persian (Iran, standard Tehran accent), in a warm, natural, friendly "
-              "female narrator voice, at a calm medium pace, with natural pauses. Text:\n" + text)
+    prompt = ("Language: Persian (Farsi, fa-IR), standard Tehran accent. You are a professional Iranian female "
+              "narrator recording an explainer video. Read the text below exactly as written, fluently and naturally, "
+              "with correct Persian pronunciation, a warm calm tone, a steady medium pace and short natural pauses "
+              "between sentences. Do not add or skip any words and do not read these instructions.\n\nText:\n" + text)
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseModalities": ["AUDIO"],
                                  "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": GEMINI_TTS_VOICE}}}}}
@@ -356,7 +358,7 @@ def gemini_tts(text, pcm_path, wav_path):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         for attempt in range(3):
             try:
-                r = requests.post(url, params={"key": GEMINI_API_KEY}, json=body, timeout=240)
+                r = requests.post(url, params={"key": GEMINI_API_KEY}, json=body, timeout=300)
                 if r.status_code == 429:
                     print("tts rate limit, waiting")
                     time.sleep(45)
@@ -369,7 +371,7 @@ def gemini_tts(text, pcm_path, wav_path):
                     rate = int(m.group(1))
                 Path(pcm_path).write_bytes(base64.b64decode(part["data"]))
                 run(["ffmpeg", "-y", "-f", "s16le", "-ar", str(rate), "-ac", "1", "-i", str(pcm_path),
-                     "-ar", "44100", "-ac", "1", "-af", "apad=pad_dur=0.35", str(wav_path)])
+                     "-ar", "44100", "-ac", "1", "-af", "apad=pad_dur=0.5", str(wav_path)])
                 return
             except Exception as e:
                 last = e
@@ -378,27 +380,52 @@ def gemini_tts(text, pcm_path, wav_path):
     raise RuntimeError(f"gemini tts failed: {last}")
 
 
+def find_pauses(path):
+    r = subprocess.run(["ffmpeg", "-i", str(path), "-af", "silencedetect=noise=-32dB:d=0.18", "-f", "null", "-"],
+                       capture_output=True, text=True)
+    starts = [float(x) for x in re.findall(r"silence_start: ([\d.]+)", r.stderr)]
+    ends = [float(x) for x in re.findall(r"silence_end: ([\d.]+)", r.stderr)]
+    return [(a + b) / 2 for a, b in zip(starts, ends)]
+
+
+def segment_durations(sentences, wav_path, total):
+    """زمان هر جمله را از روی طول متن حدس می‌زند و به نزدیک‌ترین مکث واقعی صدا می‌چسباند."""
+    if len(sentences) == 1:
+        return [total]
+    weights = [max(len(x), 1) for x in sentences]
+    pauses = find_pauses(wav_path)
+    avg = total / len(sentences)
+    bounds, cum = [0.0], 0
+    for w in weights[:-1]:
+        cum += w
+        target = total * cum / sum(weights)
+        cands = [p for p in pauses if abs(p - target) <= 0.35 * avg and p > bounds[-1] + 0.8]
+        b = min(cands, key=lambda p: abs(p - target)) if cands else max(target, bounds[-1] + 0.8)
+        bounds.append(min(b, total - 0.5))
+    bounds.append(total)
+    return [max(bounds[i + 1] - bounds[i], 0.5) for i in range(len(sentences))]
+
+
 def synth_all(sentences, work):
-    segments = []
+    """کل متن را یک‌جا می‌خواند (صدا و لحن یکدست) و زمان جمله‌ها را برای زیرنویس حساب می‌کند."""
+    text = " ".join(sentences)
+    wav = work / "audio.wav"
+    ok = False
     if os.environ.get("USE_GEMINI_TTS", "1") != "0":
         try:
-            for i, s in enumerate(sentences):
-                wav = work / f"a{i}.wav"
-                gemini_tts(s, work / f"a{i}.pcm", wav)
-                segments.append((s, wav.name, duration(wav)))
-                time.sleep(3)
-            print("voice: gemini tts")
-            return segments
+            gemini_tts(text, work / "full.pcm", wav)
+            ok = True
+            print("voice: gemini tts", GEMINI_TTS_VOICE)
         except Exception as e:
             print("gemini tts failed, falling back to edge-tts:", str(e)[:300])
-            segments = []
-    for i, s in enumerate(sentences):
-        mp3, wav = work / f"a{i}.mp3", work / f"a{i}.wav"
-        asyncio.run(tts(s, mp3))
-        run(["ffmpeg", "-y", "-i", str(mp3), "-ar", "44100", "-ac", "1", "-af", "apad=pad_dur=0.35", str(wav)])
-        segments.append((s, wav.name, duration(wav)))
-    print("voice: edge-tts", EDGE_VOICE)
-    return segments
+    if not ok:
+        mp3 = work / "full.mp3"
+        asyncio.run(tts(text, mp3))
+        run(["ffmpeg", "-y", "-i", str(mp3), "-ar", "44100", "-ac", "1", "-af", "apad=pad_dur=0.5", str(wav)])
+        print("voice: edge-tts", EDGE_VOICE)
+    total = duration(wav)
+    durs = segment_durations(sentences, wav, total)
+    return [(sent, "", d) for sent, d in zip(sentences, durs)]
 
 
 def ass_time(t):
@@ -488,7 +515,7 @@ def build_video(work, segments, sources, W, H, out_name, title=""):
     make_ass(segments, W, H, work / f"sub_{out_name}.ass", title)
     final = f"{out_name}.mp4"
     run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", f"list_{out_name}.txt", "-i", "audio.wav",
-         "-vf", f"ass=sub_{out_name}.ass", "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
+         "-vf", f"ass=sub_{out_name}.ass", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
          "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", "-shortest", final], cwd=work)
     return work / final
 
@@ -497,8 +524,6 @@ def make_videos(art, image_infos, work):
     narration = art["narration"]
     sentences = split_sentences(narration)
     segments = synth_all(sentences, work)
-    (work / "alist.txt").write_text("".join(f"file '{w}'\n" for _, w, _ in segments))
-    run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "alist.txt", "-c", "copy", "audio.wav"], cwd=work)
     imgs = []
     for i, info in enumerate(image_infos[:len(segments)]):
         p = f"img{i}.jpg"
@@ -538,17 +563,33 @@ def term(kind, name):
     return r.json()["id"] if r.ok else None
 
 
+def sanitize_html(h):
+    """متن مقاله را تمیز و برای موبایل مناسب می‌کند."""
+    h = (h or "").strip()
+    h = re.sub(r"^```(?:html)?\s*|\s*```$", "", h, flags=re.I).strip()
+    if h.count("&lt;") > 5 and "<h2" not in h:
+        h = html.unescape(h)
+    h = re.sub(r"(?is)<(script|style|iframe)\b.*?</\1>", "", h)
+    h = re.sub(r"(?is)<!doctype[^>]*>", "", h)
+    h = re.sub(r"(?is)</?(html|head|body|h1)\b[^>]*>", "", h)
+    h = re.sub(r"(?is)<table\b[^>]*>", '<table style="width:100%;border-collapse:collapse;font-size:15px">', h)
+    h = re.sub(r"(?is)<th\b[^>]*>", '<th style="border:1px solid #cfd8e3;background:#eef4fb;padding:8px;text-align:right">', h)
+    h = re.sub(r"(?is)<td\b[^>]*>", '<td style="border:1px solid #cfd8e3;padding:8px;text-align:right;vertical-align:top">', h)
+    h = re.sub(r"(?is)(<table\b.*?</table>)",
+               r'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin:16px 0">\1</div>', h)
+    return h
+
+
 def build_content(art, topic, videos, poster, internal_video_title):
-    h = ""
-    vids = [v for v in videos if v]
-    if vids:
-        h += "<h2>ویدیوی کوتاه این مقاله</h2>\n"
-        for label, url in vids:
-            h += (f'<figure class="wp-block-video"><video controls preload="metadata" playsinline '
-                  f'poster="{poster}" src="{url}"></video></figure>\n')
-    h += art["article_html"]
+    h = '<div dir="rtl">\n'
+    main_video = next((v for v in videos if v and v[0] == "افقی"), None)
+    if main_video:
+        h += (f'<div style="max-width:100%;margin:0 0 22px"><video controls preload="none" playsinline '
+              f'poster="{poster}" style="width:100%;max-width:100%;height:auto;border-radius:10px;background:#000" '
+              f'src="{main_video[1]}"></video></div>\n')
+    h += sanitize_html(art["article_html"])
     if art.get("faq"):
-        h += "<h2>سوالات متداول</h2>\n"
+        h += "\n<h2>سوالات متداول</h2>\n"
         for f in art["faq"]:
             h += f"<h3>{html.escape(f['q'])}</h3>\n<p>{html.escape(f['a'])}</p>\n"
     h += f"""
@@ -557,17 +598,8 @@ def build_content(art, topic, videos, poster, internal_video_title):
 <p>تلفن: <a href="tel:{PHONE}">{PHONE}</a> | موبایل: <a href="tel:{MOBILE}">{MOBILE}</a></p>
 <p>آدرس دفتر: {OFFICE}</p>
 <p>شماره جواز کسب: {LICENSE}</p>
+</div>
 </div>"""
-    ld = []
-    if art.get("faq"):
-        ld.append({"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [
-            {"@type": "Question", "name": f["q"], "acceptedAnswer": {"@type": "Answer", "text": f["a"]}} for f in art["faq"]]})
-    for label, url in vids[:1]:
-        ld.append({"@context": "https://schema.org", "@type": "VideoObject", "name": art["title"],
-                   "description": art["meta_description"], "thumbnailUrl": poster, "contentUrl": url,
-                   "uploadDate": datetime.datetime.now().astimezone().isoformat()})
-    for o in ld:
-        h += f'\n<script type="application/ld+json">{json.dumps(o, ensure_ascii=False)}</script>'
     return h
 
 
@@ -628,5 +660,37 @@ def main():
     save_state(state)
 
 
+VOICE_SAMPLE = ("سلام. من گوینده تاسیسات ستارخان هستم. امروز درباره دلایل خاموش شدن پکیج و روش‌های رفع آن صحبت می‌کنیم. "
+                "اگر پکیج شما مشکل دارد، با کارشناسان ما تماس بگیرید.")
+
+
+def voicetest():
+    """چند صدا را امتحان می‌کند و نمونه‌ها را در کتابخانه رسانه وردپرس می‌گذارد."""
+    global GEMINI_TTS_VOICE
+    work = Path(tempfile.mkdtemp())
+    for v in ["Aoede", "Kore", "Leda", "Zephyr", "Despina", "Sulafat"]:
+        GEMINI_TTS_VOICE = v
+        try:
+            wav = work / f"{v}.wav"
+            gemini_tts(VOICE_SAMPLE, work / f"{v}.pcm", wav)
+            mp3 = work / f"voice-test-{v}.mp3"
+            run(["ffmpeg", "-y", "-i", str(wav), "-b:a", "128k", str(mp3)])
+            upload(mp3, "audio/mpeg", f"voice-test-{v}")
+            print("uploaded sample:", v)
+        except Exception as e:
+            print("voice failed:", v, str(e)[:200])
+        time.sleep(20)
+    try:
+        mp3 = work / "voice-test-edge-Dilara.mp3"
+        asyncio.run(tts(VOICE_SAMPLE, mp3))
+        upload(mp3, "audio/mpeg", "voice-test-edge-Dilara")
+        print("uploaded sample: edge Dilara")
+    except Exception as e:
+        print("edge sample failed:", str(e)[:200])
+
+
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "voicetest":
+        voicetest()
+    else:
+        main()
