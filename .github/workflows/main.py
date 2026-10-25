@@ -1,4 +1,4 @@
-import os, asyncio, json, random, re, subprocess, sys, tempfile, datetime, html
+import os, asyncio, json, random, re, shutil, subprocess, sys, tempfile, datetime, html
 from pathlib import Path
 
 import requests
@@ -9,7 +9,8 @@ SITE = os.environ.get("WP_SITE", "https://tasisatesatarkhan.ir").rstrip("/")
 WP_USER = os.environ["WP_USER"]
 WP_APP_PASSWORD = os.environ["WP_APP_PASSWORD"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-PIXABAY_API_KEY = os.environ.get("PIXABAY_API_KEY", "")
+TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "")
 # draft = پیش‌نویس (برای بازبینی) | publish = انتشار مستقیم
 POST_STATUS = os.environ.get("POST_STATUS", "draft")
@@ -37,53 +38,58 @@ CAT_RENO = "بازسازی ساختمان"
 CAT_RAIL = "نرده و سرپله"
 
 
-def T(title, cat, kw):
-    return {"title": title, "cat": cat, "kw": kw}
+def T(title, cat, kw, kw2=None):
+    return {"title": title, "cat": cat, "kw": kw, "kw2": kw2 or []}
 
 
+# ترتیب: اول کلمه‌های تجاری و محلی (مشتری‌ساز)، بعد آموزشی. حجم جستجو را من نمی‌دانم؛
+# بعد از چند هفته در Google Search Console ببینید کدام عبارت‌ها بازدید می‌گیرند.
 TOPICS = [
-    T("دلایل خاموش شدن پکیج دیواری و راه‌حل‌های آن", CAT_HEAT, "خاموش شدن پکیج"),
-    T("ارورهای رایج پکیج و معنی آن‌ها", CAT_HEAT, "ارور پکیج"),
-    T("افت فشار آب پکیج: علت‌ها و روش رفع", CAT_HEAT, "افت فشار پکیج"),
-    T("سرویس سالانه پکیج شامل چه مراحلی است", CAT_HEAT, "سرویس پکیج"),
-    T("راهنمای انتخاب پکیج مناسب برای آپارتمان", CAT_HEAT, "انتخاب پکیج"),
-    T("پکیج کندانسینگ چیست و چه تفاوتی با پکیج معمولی دارد", CAT_HEAT, "پکیج کندانسینگ"),
-    T("هواگیری رادیاتور به روش اصولی", CAT_HEAT, "هواگیری رادیاتور"),
-    T("رادیاتور گرم نمی‌شود: علت‌ها و راه‌حل", CAT_HEAT, "رادیاتور گرم نمی‌شود"),
-    T("شستشوی شوفاژ و رادیاتور: چه زمانی و چگونه", CAT_HEAT, "شستشوی رادیاتور"),
-    T("محاسبه تعداد پره رادیاتور برای هر اتاق", CAT_HEAT, "محاسبه تعداد پره رادیاتور"),
-    T("بالانس هیدرولیکی سیستم گرمایش چیست", CAT_HEAT, "بالانس سیستم گرمایش"),
-    T("گرمایش از کف چیست؟ مزایا، معایب و محدودیت‌ها", CAT_HEAT, "گرمایش از کف"),
-    T("مراحل اجرای گرمایش از کف در ساختمان", CAT_HEAT, "اجرای گرمایش از کف"),
-    T("مشکلات رایج گرمایش از کف و تشخیص آن‌ها", CAT_HEAT, "مشکلات گرمایش از کف"),
-    T("اصول نصب صحیح اسپلیت", CAT_HEAT, "نصب اسپلیت"),
-    T("دلایل آب ریختن اسپلیت و روش رفع", CAT_HEAT, "آب ریختن اسپلیت"),
-    T("سرویس و شستشوی اسپلیت: چه زمانی لازم است", CAT_HEAT, "سرویس اسپلیت"),
-    T("داکت اسپلیت چیست و چه تفاوتی با اسپلیت دیواری دارد", CAT_HEAT, "داکت اسپلیت"),
-    T("چیلر چیست؟ انواع چیلر تراکمی و جذبی", CAT_HEAT, "چیلر"),
-    T("سرویس دوره‌ای چیلر و نکات نگهداری", CAT_HEAT, "سرویس چیلر"),
-    T("هواساز چیست و در چه ساختمان‌هایی استفاده می‌شود", CAT_HEAT, "هواساز"),
-    T("موتورخانه مرکزی ساختمان: اجزا و نحوه کار", CAT_ENGINE, "موتورخانه مرکزی"),
-    T("نگهداری و بهره‌برداری صحیح از موتورخانه مرکزی", CAT_ENGINE, "نگهداری موتورخانه"),
-    T("پمپ‌های موتورخانه و نشانه‌های خرابی آن‌ها", CAT_ENGINE, "پمپ موتورخانه"),
-    T("دیگ آب گرم و مشعل: آشنایی و عیب‌یابی رایج", CAT_ENGINE, "دیگ و مشعل موتورخانه"),
-    T("لوله‌کشی آب سرد و گرم: لوله فلزی یا لوله سفید؟", CAT_PIPE, "لوله‌کشی آب سرد و گرم"),
-    T("اصول لوله‌کشی ساختمان با لوله سفید", CAT_PIPE, "لوله‌کشی با لوله سفید"),
-    T("تشخیص و رفع نشتی لوله آب در ساختمان", CAT_PIPE, "نشتی لوله آب"),
-    T("لوله‌کشی فاضلاب ساختمان: شیب، هواکش و اشتباهات رایج", CAT_PIPE, "لوله‌کشی فاضلاب"),
-    T("لوله‌کشی گاز ساختمان: نکات ایمنی و الزامات", CAT_PIPE, "لوله‌کشی گاز ساختمان"),
-    T("مراحل نصب توالت فرنگی به صورت اصولی", CAT_BATH, "نصب توالت فرنگی"),
-    T("فلاش تانک توکار چیست؟ مزایا و نکات نصب", CAT_BATH, "فلاش تانک توکار"),
-    T("تعمیر فلاش تانک: هرز رفتن آب و نشتی", CAT_BATH, "تعمیر فلاش تانک"),
-    T("نصب و تعمیر شیرآلات توکار", CAT_BATH, "شیرآلات توکار"),
-    T("نصب وان و جکوزی: نکات فنی مهم", CAT_BATH, "نصب وان و جکوزی"),
-    T("اتاق دوش و جت شاور: انتخاب و نصب", CAT_BATH, "نصب اتاق دوش"),
-    T("والهنگ چیست و نکات نصب آن", CAT_BATH, "والهنگ"),
-    T("مراحل بازسازی حمام و توالت از ابتدا تا انتها", CAT_RENO, "بازسازی حمام و توالت"),
-    T("چک‌لیست تاسیسات هنگام بازسازی ساختمان", CAT_RENO, "تاسیسات بازسازی ساختمان"),
-    T("نرده استیل برای پله و بالکن: انواع و نکات انتخاب", CAT_RAIL, "نرده استیل"),
-    T("نرده آهنی یا چوبی؟ مقایسه و راهنمای انتخاب", CAT_RAIL, "نرده آهنی و چوبی"),
-    T("نگهداری از نرده استیل و جلوگیری از لکه و زنگ‌زدگی", CAT_RAIL, "نگهداری نرده استیل"),
+    T("تعمیر پکیج در ستارخان و غرب تهران: خدمات، هزینه و نکات", CAT_HEAT, "تعمیر پکیج در ستارخان", ["تعمیر پکیج تهران", "تعمیرکار پکیج", "تعمیر پکیج در محل"]),
+    T("سرویس پکیج در تهران: مراحل، زمان مناسب و هزینه", CAT_HEAT, "سرویس پکیج در تهران", ["سرویس پکیج", "هزینه سرویس پکیج", "سرویس سالانه پکیج"]),
+    T("نصب و تعمیر اسپلیت در تهران: راهنمای کامل", CAT_HEAT, "نصب اسپلیت در تهران", ["تعمیر اسپلیت", "سرویس اسپلیت", "نصب کولر گازی"]),
+    T("لوله‌کشی ساختمان در تهران: خدمات، مراحل و هزینه", CAT_PIPE, "لوله کشی ساختمان در تهران", ["لوله کشی ساختمان", "هزینه لوله کشی", "لوله کش ساختمان"]),
+    T("نگهداری موتورخانه مرکزی ساختمان: خدمات و نکات", CAT_ENGINE, "نگهداری موتورخانه", ["تامین و نگهداری موتورخانه", "شرکت نگهداری موتورخانه", "سرویس موتورخانه"]),
+    T("بازسازی حمام و توالت: مراحل، هزینه و نکات اجرایی", CAT_RENO, "بازسازی حمام و توالت", ["بازسازی حمام", "هزینه بازسازی حمام", "بازسازی سرویس بهداشتی"]),
+    T("تعمیر شوفاژ و رادیاتور در تهران", CAT_HEAT, "تعمیر شوفاژ", ["تعمیر رادیاتور", "تعمیرکار شوفاژ", "نشتی رادیاتور"]),
+    T("دلایل خاموش شدن پکیج دیواری و راه‌حل‌ها", CAT_HEAT, "خاموش شدن پکیج", ["پکیج روشن نمی شود", "پکیج خاموش می شود"]),
+    T("ارورهای رایج پکیج و معنی آن‌ها", CAT_HEAT, "ارور پکیج", ["خطای پکیج", "کد خطای پکیج"]),
+    T("افت فشار پکیج: علت‌ها و روش رفع", CAT_HEAT, "افت فشار پکیج", ["فشار پکیج کم می شود", "شارژ پکیج"]),
+    T("هواگیری رادیاتور به روش اصولی", CAT_HEAT, "هواگیری رادیاتور", ["هواگیری شوفاژ", "هواگیری پکیج"]),
+    T("رادیاتور گرم نمی‌شود: علت‌ها و راه‌حل", CAT_HEAT, "رادیاتور گرم نمی شود", ["رادیاتور نصفه گرم", "رادیاتور سرد"]),
+    T("شستشوی شوفاژ و رادیاتور (پاورفلاشینگ)", CAT_HEAT, "شستشوی شوفاژ", ["شستشوی رادیاتور", "پاور فلاشینگ"]),
+    T("دلایل آب ریختن اسپلیت و روش رفع", CAT_HEAT, "آب ریختن اسپلیت", ["چکه کردن اسپلیت", "تعمیر اسپلیت"]),
+    T("سرویس و شستشوی اسپلیت: چه زمانی لازم است", CAT_HEAT, "سرویس اسپلیت", ["شستشوی اسپلیت", "هزینه سرویس اسپلیت"]),
+    T("داکت اسپلیت چیست و چه تفاوتی با اسپلیت دیواری دارد", CAT_HEAT, "داکت اسپلیت", ["نصب داکت اسپلیت", "تعمیر داکت اسپلیت"]),
+    T("گرمایش از کف چیست؟ مزایا، معایب و هزینه", CAT_HEAT, "گرمایش از کف", ["سیستم گرمایش از کف", "هزینه گرمایش از کف"]),
+    T("مراحل اجرای گرمایش از کف در ساختمان", CAT_HEAT, "اجرای گرمایش از کف", ["نصب گرمایش از کف", "لوله گرمایش از کف"]),
+    T("مشکلات رایج گرمایش از کف و تشخیص آن‌ها", CAT_HEAT, "مشکلات گرمایش از کف", ["تعمیر گرمایش از کف"]),
+    T("راهنمای خرید پکیج مناسب برای آپارتمان", CAT_HEAT, "خرید پکیج", ["انتخاب پکیج", "بهترین پکیج", "ظرفیت پکیج"]),
+    T("پکیج کندانسینگ چیست و چه تفاوتی با پکیج معمولی دارد", CAT_HEAT, "پکیج کندانسینگ", ["پکیج کندانسی", "مصرف گاز پکیج"]),
+    T("محاسبه تعداد پره رادیاتور برای هر اتاق", CAT_HEAT, "محاسبه تعداد پره رادیاتور", ["تعداد پره رادیاتور", "انتخاب رادیاتور"]),
+    T("بالانس هیدرولیکی سیستم گرمایش چیست", CAT_HEAT, "بالانس سیستم گرمایش", ["بالانس هیدرولیک"]),
+    T("چیلر چیست؟ انواع چیلر تراکمی و جذبی", CAT_HEAT, "چیلر", ["انواع چیلر", "چیلر تراکمی", "چیلر جذبی"]),
+    T("سرویس دوره‌ای چیلر و نکات نگهداری", CAT_HEAT, "سرویس چیلر", ["تعمیر چیلر", "نگهداری چیلر"]),
+    T("هواساز چیست و در چه ساختمان‌هایی استفاده می‌شود", CAT_HEAT, "هواساز", ["هواساز AHU", "سرویس هواساز"]),
+    T("موتورخانه مرکزی ساختمان: اجزا و نحوه کار", CAT_ENGINE, "موتورخانه مرکزی", ["اجزای موتورخانه", "موتورخانه ساختمان"]),
+    T("پمپ‌های موتورخانه و نشانه‌های خرابی آن‌ها", CAT_ENGINE, "پمپ موتورخانه", ["تعمیر پمپ موتورخانه", "پمپ سیرکولاتور"]),
+    T("دیگ آب گرم و مشعل: آشنایی و عیب‌یابی رایج", CAT_ENGINE, "دیگ و مشعل موتورخانه", ["تعمیر مشعل", "سرویس دیگ"]),
+    T("لوله‌کشی آب سرد و گرم: لوله فلزی یا لوله سفید؟", CAT_PIPE, "لوله کشی آب سرد و گرم", ["لوله سفید یا فلزی", "لوله پنج لایه"]),
+    T("اصول لوله‌کشی ساختمان با لوله سفید", CAT_PIPE, "لوله کشی با لوله سفید", ["لوله پلی پروپیلن", "جوش لوله سفید"]),
+    T("تشخیص و رفع نشتی لوله آب در ساختمان", CAT_PIPE, "نشتی لوله آب", ["تشخیص نشتی", "تعمیر لوله ترکیده", "نشتی آب ساختمان"]),
+    T("لوله‌کشی فاضلاب ساختمان: شیب، هواکش و اشتباهات رایج", CAT_PIPE, "لوله کشی فاضلاب", ["شیب لوله فاضلاب", "بوی فاضلاب"]),
+    T("لوله‌کشی گاز ساختمان: نکات ایمنی و الزامات", CAT_PIPE, "لوله کشی گاز ساختمان", ["لوله کشی گاز", "ایمنی گاز"]),
+    T("مراحل نصب توالت فرنگی به صورت اصولی", CAT_BATH, "نصب توالت فرنگی", ["نصب توالت", "تعمیر توالت فرنگی"]),
+    T("فلاش تانک توکار چیست؟ مزایا و نکات نصب", CAT_BATH, "فلاش تانک توکار", ["نصب فلاش تانک توکار", "فلاش تانک دیواری"]),
+    T("تعمیر فلاش تانک: هرز رفتن آب و نشتی", CAT_BATH, "تعمیر فلاش تانک", ["هرز رفتن آب توالت", "تعمیر شیر فلاش تانک"]),
+    T("نصب و تعمیر شیرآلات توکار", CAT_BATH, "شیرآلات توکار", ["نصب شیر توکار", "تعمیر شیر توکار"]),
+    T("نصب وان و جکوزی: نکات فنی مهم", CAT_BATH, "نصب وان و جکوزی", ["نصب جکوزی", "تعمیر جکوزی"]),
+    T("اتاق دوش و جت شاور: انتخاب و نصب", CAT_BATH, "نصب اتاق دوش", ["جت شاور", "کابین دوش"]),
+    T("والهنگ چیست و نکات نصب آن", CAT_BATH, "والهنگ", ["توالت والهنگ", "نصب والهنگ"]),
+    T("چک‌لیست تاسیسات هنگام بازسازی ساختمان", CAT_RENO, "تاسیسات بازسازی ساختمان", ["بازسازی ساختمان", "بازسازی تاسیسات"]),
+    T("نرده استیل برای پله و بالکن: انواع و نکات انتخاب", CAT_RAIL, "نرده استیل", ["نرده استیل پله", "نرده بالکن"]),
+    T("نرده آهنی یا چوبی؟ مقایسه و راهنمای انتخاب", CAT_RAIL, "نرده آهنی و چوبی", ["نرده آهنی", "نرده چوبی"]),
+    T("نگهداری از نرده استیل و جلوگیری از لکه و زنگ‌زدگی", CAT_RAIL, "نگهداری نرده استیل", ["تمیز کردن استیل", "زنگ زدگی استیل"]),
 ]
 
 # ============================================================
@@ -92,7 +98,12 @@ AUTH = (WP_USER, WP_APP_PASSWORD)
 API = f"{SITE}/wp-json/wp/v2"
 HERE = Path(__file__).parent
 STATE_FILE = HERE / "state.json"
-COPPER_ASS = "&H00B5701A"  # آبی تیره (BGR)
+
+# رنگ‌های ویدیو (BGR برای زیرنویس) و پس‌زمینه (RGB)
+ACCENT_ASS = "&H0045C4F5"      # زرد کهربایی
+ACCENT_BAR = "&H0045C4F5"
+BG_TOP = (9, 30, 58)           # بالای پس‌زمینه
+BG_BOTTOM = (26, 76, 135)      # پایین پس‌زمینه
 
 
 # ---------------------------------------------------------------- helpers
@@ -135,7 +146,7 @@ def list_models():
                 if "generateContent" in m.get("supportedGenerationMethods", []):
                     _ALL.append(m["name"].split("/")[-1])
         except Exception as e:
-            print("model list failed:", e)
+            print("model list failed:", type(e).__name__)
     return _ALL
 
 
@@ -197,7 +208,7 @@ def pick_topic(state):
         new = gemini(f"""برای وبلاگ فنی سایت «{BRAND}» ({BUSINESS})
 ۱۰ موضوع جدید مقاله فنی و سئو شده بنویس که با این عناوین تکراری نباشد:
 {json.dumps(state['done'][-80:], ensure_ascii=False)}
-فقط JSON: لیستی از اشیاء با کلیدهای title, cat (یکی از: {', '.join(cats)}), kw (کلمه کلیدی اصلی فارسی)""")
+فقط JSON: لیستی از اشیاء با کلیدهای title, cat (یکی از: {', '.join(cats)}), kw (کلمه کلیدی اصلی فارسی), kw2 (لیست ۲ تا ۳ کلمه کلیدی فرعی)""")
         state.setdefault("extra_topics", []).extend(new)
         left = new
     return left[0]
@@ -218,6 +229,7 @@ def write_article(topic):
 درباره کسب‌وکار: {BUSINESS}
 موضوع مقاله: «{topic['title']}»
 کلمه کلیدی اصلی: «{topic['kw']}»
+کلمات کلیدی فرعی (فقط طبیعی و بدون تکرار زیاد در متن، یکی دو بار در تیترها): {', '.join(topic.get('kw2', []))}
 
 هدف: مقاله‌ای جامع، فوق‌العاده فنی، کاربردی و روان که از رقبای صفحه اول گوگل کامل‌تر و مفیدتر باشد، برای کاربر ایرانی (مالک ساختمان، مدیر ساختمان، مستأجر) و تا حدی برای تکنسین‌ها.
 
@@ -230,13 +242,15 @@ def write_article(topic):
 - کلمه کلیدی در عنوان، پاراگراف اول، حداقل دو تیتر h2 و نتیجه‌گیری بیاید (طبیعی، بدون پرکردن).
 - ادعای تجربه یا آمار جعلی نیاور (مثلاً «ما ۲۰ سال سابقه داریم»)، فقط از «تیم فنی {BRAND}» به صورت کلی استفاده کن.
 - در انتها دعوت به مشاوره با {BRAND} بیاور (بدون شماره تلفن؛ شماره را سیستم اضافه می‌کند).
-- ۲ تا ۳ لینک داخلی فقط از این فهرست و فقط اگر مرتبط‌اند، با تگ a: {json.dumps(internal, ensure_ascii=False)}
+- ۳ تا ۵ لینک داخلی طبیعی (با متن لنگر توصیفی) فقط از این فهرست و فقط مقاله‌های مرتبط، با تگ a. اگر فهرست خالی است هیچ لینکی نساز و هیچ آدرسی از خودت نساز: {json.dumps(internal, ensure_ascii=False)}
 - متن روایت ویدیو (narration): ۱۳۰ تا ۱۶۰ کلمه، حداکثر ۷ جمله، گفتاری، طبیعی و فنی ولی ساده برای گوینده، هر جمله حداکثر ۲۰ کلمه و با نقطه تمام‌شونده. برای خوانده‌شدن درست توسط موتور تبدیل متن به گفتار: همه عددها را با حروف بنویس، هیچ کلمه انگلیسی، مخفف، علامت و ایموجی نیاور، از کلمه‌های ساده و رایج فارسی معیار و املای استاندارد با نیم‌فاصله درست استفاده کن. بدون آدرس سایت و شماره. شروع جذاب و پایان با دعوت به مشاوره با {BRAND}.
-- scene_queries: به تعداد جمله‌های narration (به ترتیب)، هر کدام یک عبارت کوتاه انگلیسی (۲ تا ۴ کلمه) برای جستجوی فیلم استوک مرتبط با همان جمله، مثل: plumber repairing pipe, boiler maintenance, radiator heating, air conditioner installation. بدون نام برند.
+- slides: به تعداد جمله‌های narration (به ترتیب)، برای هر جمله یک شیء با کلیدهای title (عنوان کوتاه فارسی حداکثر ۵ کلمه) و points (۲ تا ۳ نکته بسیار کوتاه فارسی، هرکدام حداکثر ۷ کلمه، دقیقاً مطابق همان جمله). این‌ها روی صفحه ویدیو نمایش داده می‌شوند، پس باید دقیق، فنی و بدون غلط باشند.
+- video_title: عنوان جذاب ویدیو برای آپارات و یوتیوب (حداکثر ۷۰ کاراکتر، شامل کلمه کلیدی). video_description: توضیح ۴ تا ۶ خطی فارسی برای زیر ویدیو، با کلمه کلیدی و دعوت به تماس با {BRAND} (بدون لینک و بدون شماره). hashtags: ۶ تا ۸ هشتگ فارسی بدون علامت #.
+- summary_points: فهرست ۴ تا ۵ جمله‌ی خیلی کوتاه فارسی که مهم‌ترین نکات مقاله را خلاصه می‌کنند (برای کادر «خلاصه مقاله» بالای مقاله).
 
 فقط JSON با این کلیدها:
 title (حداکثر ۶۰ کاراکتر، شامل کلمه کلیدی), slug (انگلیسی کوچک با خط تیره), meta_description (۱۲۰ تا ۱۵۵ کاراکتر شامل کلمه کلیدی),
-tags (۳ تا ۵ برچسب فارسی), article_html, faq (لیست ۶ شیء با q و a، پاسخ‌های دقیق و کامل در ۲ تا ۴ جمله), narration, scene_queries, image_keywords (۳ عبارت انگلیسی برای جستجوی عکس), image_alt (متن جایگزین فارسی عکس شاخص)"""
+tags (۳ تا ۵ برچسب فارسی), article_html, faq (لیست ۶ شیء با q و a، پاسخ‌های دقیق و کامل در ۲ تا ۴ جمله), summary_points, narration, slides, video_title, video_description, hashtags, image_alt (متن جایگزین فارسی عکس شاخص)"""
     art = gemini(prompt)
     return review_article(art, topic)
 
@@ -263,57 +277,107 @@ def review_article(art, topic):
     return art
 
 
-# ---------------------------------------------------------------- images
-def wp_images():
-    out = []
-    try:
-        r = requests.get(f"{API}/media", params={"per_page": 100, "media_type": "image",
-                                                 "_fields": "id,source_url,media_details"}, auth=AUTH, timeout=60)
-        for m in r.json():
-            d = m.get("media_details") or {}
-            if d.get("width", 0) >= 800:
-                out.append({"id": m["id"], "url": m["source_url"]})
-    except Exception as e:
-        print("media list failed", e)
-    return out
-
-
-def pixabay_photos(query, n=2):
-    if not PIXABAY_API_KEY:
-        return []
-    try:
-        r = requests.get("https://pixabay.com/api/", params={
-            "key": PIXABAY_API_KEY, "q": query[:100], "image_type": "photo", "orientation": "horizontal",
-            "min_width": 1280, "safesearch": "true", "per_page": 12}, timeout=60)
-        hits = r.json().get("hits", [])
-        random.shuffle(hits)
-        return [{"id": None, "url": h["largeImageURL"]} for h in hits[:n]]
-    except Exception as e:
-        print("pixabay photo failed:", str(e)[:150])
-        return []
-
-
-def pick_images(n, keywords, state):
-    lib = wp_images()
-    used = set(state.get("used_images", []))
-    fresh = [i for i in lib if i["id"] not in used]
-    random.shuffle(fresh)
-    random.shuffle(lib)
-    chosen = (fresh + [i for i in lib if i not in fresh])[:n]
-    if len(chosen) < n:
-        for k in keywords:
-            chosen += pixabay_photos(k)
-    if not chosen:
-        raise RuntimeError("no images available (upload photos to the media library or set PIXABAY_API_KEY)")
-    while len(chosen) < n:
-        chosen.append(chosen[len(chosen) % len(chosen)])
-    return chosen[:n]
-
-
+# ---------------------------------------------------------------- library
 def download(url, path):
-    r = requests.get(url, timeout=120)
+    r = requests.get(url, timeout=300)
     r.raise_for_status()
     Path(path).write_bytes(r.content)
+
+
+def strip_tags(t):
+    t = re.sub(r"<[^>]+>", " ", html.unescape(str(t or "")))
+    return re.sub(r"\s+", " ", t.replace("\xa0", " ")).strip()
+
+
+def fetch_library():
+    """عکس‌ها و فیلم‌های کتابخانه سایت که صاحب سایت برایشان توضیح نوشته است."""
+    items = []
+    for mt in ("image", "video"):
+        for page in range(1, 4):
+            try:
+                r = requests.get(f"{API}/media", params={
+                    "per_page": 100, "page": page, "media_type": mt,
+                    "_fields": "id,source_url,alt_text,title,caption,description,media_details"}, auth=AUTH, timeout=60)
+                if r.status_code != 200:
+                    break
+                data = r.json()
+            except Exception as e:
+                print("media list failed:", type(e).__name__)
+                break
+            if not data:
+                break
+            for m in data:
+                url = m.get("source_url", "")
+                fn = url.rsplit("/", 1)[-1].lower()
+                if re.match(r"(cover|vertical|horizontal|featured|card|story|slide|logo|poster)[-_.\d]", fn):
+                    continue
+                if strip_tags((m.get("description") or {}).get("rendered")) == "AUTO":
+                    continue
+                alt = strip_tags(m.get("alt_text"))
+                cap = strip_tags((m.get("caption") or {}).get("rendered"))
+                desc = strip_tags((m.get("description") or {}).get("rendered"))
+                ttl = strip_tags((m.get("title") or {}).get("rendered"))
+                if not (alt or cap or desc):
+                    continue
+                label = " | ".join(dict.fromkeys(x for x in (desc, cap, alt, ttl) if x))[:200]
+                d = m.get("media_details") or {}
+                large = ((d.get("sizes") or {}).get("large") or {}).get("source_url")
+                items.append({"id": m["id"], "type": mt, "url": url, "large": large or url,
+                              "label": label, "alt": alt or desc or cap or ttl})
+            if len(data) < 100:
+                break
+    print("library items with descriptions:", len(items))
+    return items
+
+
+def match_library(topic, sentences, heads, library):
+    """هوش مصنوعی مناسب‌ترین مورد کتابخانه را برای هر صحنه و هر بخش مقاله پیدا می‌کند (یا هیچ‌کدام)."""
+    empty = {"video_scenes": [], "section_media": [], "story_media": [], "featured": None, "section_points": []}
+    lib = [{"id": i["id"], "type": i["type"], "label": i["label"]} for i in library[:300]]
+    prompt = f"""موضوع مقاله: «{topic['title']}»
+جمله‌های روایت ویدیو (به ترتیب): {json.dumps(sentences, ensure_ascii=False)}
+تیترهای مقاله (به ترتیب): {json.dumps(heads, ensure_ascii=False)}
+کتابخانه رسانه سایت (id، type و label که توضیح خود صاحب سایت است): {json.dumps(lib, ensure_ascii=False)}
+
+وظیفه: برای هر جمله ویدیو، هر تیتر مقاله و هر صفحه وب‌استوری (به تعداد جمله‌ها) دقیق‌ترین مورد کتابخانه را پیدا کن.
+قوانین: فقط اگر label واقعاً همان محصول، موضوع یا کار را توصیف می‌کند انتخاب کن. اگر شک داری یا مرتبط نیست null بگذار. حدس نزن و مورد بی‌ربط انتخاب نکن (مثلاً برای پکیج، عکس آبگرمکن یا لوله‌کشی ممنوع است). هر id را در هر فهرست فقط یک بار استفاده کن. مورد type=video فقط در video_scenes مجاز است.
+برای هر تیتر مقاله ۳ نکته خیلی کوتاه و دقیق فارسی (هرکدام حداکثر ۷ کلمه) هم بنویس (برای کارت گرافیکی).
+فقط JSON: {{"video_scenes": [{len(sentences)} عدد id یا null], "section_media": [{len(heads)} عدد id یا null], "story_media": [{len(sentences)} عدد id یا null], "featured": id یا null, "section_points": [{len(heads)} فهرست ۳ تایی]}}"""
+    try:
+        r = gemini(prompt, retries=1)
+    except Exception as e:
+        print("library match skipped:", str(e)[:200])
+        return empty
+    by_id = {i["id"]: i for i in library}
+
+    def clean(lst, n, allow_video):
+        out, used = [], set()
+        for k in range(n):
+            v = lst[k] if isinstance(lst, list) and k < len(lst) else None
+            try:
+                v = int(v) if v is not None else None
+            except (TypeError, ValueError):
+                v = None
+            it = by_id.get(v)
+            if it and v not in used and (allow_video or it["type"] == "image"):
+                used.add(v)
+                out.append(v)
+            else:
+                out.append(None)
+        return out
+
+    feat = r.get("featured")
+    try:
+        feat = int(feat) if feat is not None else None
+    except (TypeError, ValueError):
+        feat = None
+    if feat not in by_id or by_id[feat]["type"] != "image":
+        feat = None
+    pts = r.get("section_points") if isinstance(r.get("section_points"), list) else []
+    return {"video_scenes": clean(r.get("video_scenes"), len(sentences), True),
+            "section_media": clean(r.get("section_media"), len(heads), False),
+            "story_media": clean(r.get("story_media"), len(sentences), False),
+            "featured": feat, "section_points": pts}
 
 
 # ---------------------------------------------------------------- video
@@ -346,8 +410,10 @@ def gemini_tts(text, pcm_path, wav_path):
     models = [n for n in list_models() if "tts" in n]
     if not models:
         raise RuntimeError("no gemini tts model available")
-    prompt = ("Read aloud in Persian (Iran, standard Tehran accent), in a warm, natural, friendly "
-              "female narrator voice, at a calm medium pace, with natural pauses. Text:\n" + text)
+    prompt = ("Language: Persian (Farsi, fa-IR), standard Tehran accent. You are a professional Iranian female "
+              "narrator recording an explainer video. Read the text below exactly as written, fluently and naturally, "
+              "with correct Persian pronunciation, a warm calm tone, a steady medium pace and short natural pauses "
+              "between sentences. Do not add or skip any words and do not read these instructions.\n\nText:\n" + text)
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseModalities": ["AUDIO"],
                                  "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": GEMINI_TTS_VOICE}}}}}
@@ -356,7 +422,7 @@ def gemini_tts(text, pcm_path, wav_path):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         for attempt in range(3):
             try:
-                r = requests.post(url, params={"key": GEMINI_API_KEY}, json=body, timeout=240)
+                r = requests.post(url, params={"key": GEMINI_API_KEY}, json=body, timeout=300)
                 if r.status_code == 429:
                     print("tts rate limit, waiting")
                     time.sleep(45)
@@ -369,7 +435,7 @@ def gemini_tts(text, pcm_path, wav_path):
                     rate = int(m.group(1))
                 Path(pcm_path).write_bytes(base64.b64decode(part["data"]))
                 run(["ffmpeg", "-y", "-f", "s16le", "-ar", str(rate), "-ac", "1", "-i", str(pcm_path),
-                     "-ar", "44100", "-ac", "1", "-af", "apad=pad_dur=0.35", str(wav_path)])
+                     "-ar", "44100", "-ac", "1", "-af", "apad=pad_dur=0.5", str(wav_path)])
                 return
             except Exception as e:
                 last = e
@@ -378,27 +444,52 @@ def gemini_tts(text, pcm_path, wav_path):
     raise RuntimeError(f"gemini tts failed: {last}")
 
 
+def find_pauses(path):
+    r = subprocess.run(["ffmpeg", "-i", str(path), "-af", "silencedetect=noise=-32dB:d=0.18", "-f", "null", "-"],
+                       capture_output=True, text=True)
+    starts = [float(x) for x in re.findall(r"silence_start: ([\d.]+)", r.stderr)]
+    ends = [float(x) for x in re.findall(r"silence_end: ([\d.]+)", r.stderr)]
+    return [(a + b) / 2 for a, b in zip(starts, ends)]
+
+
+def segment_durations(sentences, wav_path, total):
+    """زمان هر جمله را از روی طول متن حدس می‌زند و به نزدیک‌ترین مکث واقعی صدا می‌چسباند."""
+    if len(sentences) == 1:
+        return [total]
+    weights = [max(len(x), 1) for x in sentences]
+    pauses = find_pauses(wav_path)
+    avg = total / len(sentences)
+    bounds, cum = [0.0], 0
+    for w in weights[:-1]:
+        cum += w
+        target = total * cum / sum(weights)
+        cands = [p for p in pauses if abs(p - target) <= 0.35 * avg and p > bounds[-1] + 0.8]
+        b = min(cands, key=lambda p: abs(p - target)) if cands else max(target, bounds[-1] + 0.8)
+        bounds.append(min(b, total - 0.5))
+    bounds.append(total)
+    return [max(bounds[i + 1] - bounds[i], 0.5) for i in range(len(sentences))]
+
+
 def synth_all(sentences, work):
-    segments = []
+    """کل متن را یک‌جا می‌خواند (صدا و لحن یکدست) و زمان جمله‌ها را برای زیرنویس حساب می‌کند."""
+    text = " ".join(sentences)
+    wav = work / "audio.wav"
+    ok = False
     if os.environ.get("USE_GEMINI_TTS", "1") != "0":
         try:
-            for i, s in enumerate(sentences):
-                wav = work / f"a{i}.wav"
-                gemini_tts(s, work / f"a{i}.pcm", wav)
-                segments.append((s, wav.name, duration(wav)))
-                time.sleep(3)
-            print("voice: gemini tts")
-            return segments
+            gemini_tts(text, work / "full.pcm", wav)
+            ok = True
+            print("voice: gemini tts", GEMINI_TTS_VOICE)
         except Exception as e:
             print("gemini tts failed, falling back to edge-tts:", str(e)[:300])
-            segments = []
-    for i, s in enumerate(sentences):
-        mp3, wav = work / f"a{i}.mp3", work / f"a{i}.wav"
-        asyncio.run(tts(s, mp3))
-        run(["ffmpeg", "-y", "-i", str(mp3), "-ar", "44100", "-ac", "1", "-af", "apad=pad_dur=0.35", str(wav)])
-        segments.append((s, wav.name, duration(wav)))
-    print("voice: edge-tts", EDGE_VOICE)
-    return segments
+    if not ok:
+        mp3 = work / "full.mp3"
+        asyncio.run(tts(text, mp3))
+        run(["ffmpeg", "-y", "-i", str(mp3), "-ar", "44100", "-ac", "1", "-af", "apad=pad_dur=0.5", str(wav)])
+        print("voice: edge-tts", EDGE_VOICE)
+    total = duration(wav)
+    durs = segment_durations(sentences, wav, total)
+    return [(sent, "", d) for sent, d in zip(sentences, durs)]
 
 
 def ass_time(t):
@@ -407,10 +498,37 @@ def ass_time(t):
     return f"{int(h)}:{int(m):02d}:{s:05.2f}"
 
 
-def make_ass(segments, W, H, path, title=""):
+def fa(n):
+    return str(n).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+
+
+def esc(t):
+    """متن را برای زیرنویس تمیز می‌کند و جهت راست‌به‌چپ را مشخص می‌کند."""
+    t = re.sub(r"[{}\\]", "", str(t or "")).replace("\n", " ").strip()
+    return ("\u200f" + t + "\u200f") if t else t
+
+
+def make_bg(work, W, H, name):
+    (r0, g0, b0), (r1, g1, b1) = BG_TOP, BG_BOTTOM
+    vf = (f"format=gbrp,geq=r='{r0}+({r1}-{r0})*Y/{H}':g='{g0}+({g1}-{g0})*Y/{H}':b='{b0}+({b1}-{b0})*Y/{H}',"
+          f"format=rgb24")
+    run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=black:s={W}x{H}:d=1", "-vf", vf, "-frames:v", "1",
+         f"bg_{name}.png"], cwd=work)
+    return f"bg_{name}.png"
+
+
+def make_explainer_ass(segments, slides, W, H, path, title, intro, outro):
     vertical = H > W
-    size = 62 if vertical else 50
-    marginv = 420 if vertical else 70
+    head_sz = 90 if vertical else 68
+    body_sz = 60 if vertical else 46
+    sub_sz = 48 if vertical else 38
+    sub_mv = 250 if vertical else 60
+    cx = W // 2
+    head_y = 330 if vertical else 140
+    body_y0 = 610 if vertical else 320
+    gap = 200 if vertical else 110
+    narr = sum(d for _, _, d in segments)
+    total = intro + narr + outro
     head = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {W}
@@ -419,102 +537,161 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: Sub,Vazirmatn,{size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H96000000,1,0,0,0,100,100,0,0,3,3,0,2,90,90,{marginv},1
-Style: Mark,Vazirmatn,{int(size*0.55)},{COPPER_ASS},&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2,0,8,40,40,{80 if vertical else 40},1
-Style: Card,Vazirmatn,{int(size*1.1)},&H00FFFFFF,&H00FFFFFF,{COPPER_ASS},&H00000000,1,0,0,0,100,100,0,0,3,10,0,5,100,100,40,1
+Style: Head,Vazirmatn,{head_sz},{ACCENT_ASS},&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,3,0,8,90,90,40,1
+Style: Body,Vazirmatn,{body_sz},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2,0,8,100,100,40,1
+Style: Sub,Vazirmatn,{sub_sz},&H00FFFFFF,&H00FFFFFF,&H78000000,&H96000000,1,0,0,0,100,100,0,0,3,3,0,2,90,90,{sub_mv},1
+Style: Mark,Vazirmatn,{int(body_sz*0.6)},{ACCENT_ASS},&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2,0,8,40,40,{60 if vertical else 30},1
+Style: Card,Vazirmatn,{head_sz},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,3,0,5,100,100,40,1
+Style: Step,Vazirmatn,{int(body_sz*0.7)},{ACCENT_ASS},&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2,0,9,40,40,40,1
+Style: Bar,Vazirmatn,20,{ACCENT_BAR},&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,9,0,0,0,1
 
 [Events]
-Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Encoding_unused,Text
+Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 """
-    head = head.replace("Encoding_unused", "Effect")
-    total = sum(d for _, _, d in segments)
-    lines = [f"Dialogue: 1,{ass_time(0)},{ass_time(total)},Mark,,0,0,0,,{BRAND}  |  {SITE_SHORT}"]
-    t = 0.0
-    for text, _, d in segments:
-        lines.append(f"Dialogue: 0,{ass_time(t)},{ass_time(t + d)},Sub,,0,0,0,,{text}")
-        t += d
-    clean = re.sub(r"[{}\\]", "", title)
-    if clean:
-        lines.append(f"Dialogue: 2,{ass_time(0.2)},{ass_time(min(3.6, total))},Card,,0,0,0,,{clean}")
-    if total > 8:
-        lines.append(f"Dialogue: 2,{ass_time(total - 4.2)},{ass_time(total)},Card,,0,0,0,,{BRAND}\\Nتماس: {PHONE}")
-    Path(path).write_text(head + "\n".join(lines), encoding="utf-8")
+    ev = []
+    # برند بالای صفحه در تمام مدت
+    ev.append(f"Dialogue: 1,{ass_time(0)},{ass_time(total)},Mark,,0,0,0,,{{\\an8\\pos({cx},{60 if vertical else 28})}}{esc(BRAND)}  |  {SITE_SHORT}")
+    # کارت عنوان (ابتدا)
+    ev.append(f"Dialogue: 2,{ass_time(0.2)},{ass_time(intro)},Card,,0,0,0,,{{\\fad(450,350)}}{esc(title)}")
+    # نوار پیشرفت
+    bar_h = 14
+    ev.append(f"Dialogue: 1,{ass_time(intro)},{ass_time(intro + narr)},Bar,,0,0,0,,"
+              f"{{\\an9\\pos({W},0)\\p1\\fscx1\\t(0,{int(narr * 1000)},\\fscx100)}}m 0 0 l {W} 0 l {W} {bar_h} l 0 {bar_h}{{\\p0}}")
+    t = intro
+    n = len(segments)
+    for i, (text, _, d) in enumerate(segments):
+        end = t + d
+        sl = slides[i] if i < len(slides) else {}
+        ttl = esc(sl.get("title") or " ".join(text.split()[:5]))
+        ev.append(f"Dialogue: 2,{ass_time(t)},{ass_time(end)},Head,,0,0,0,,{{\\an8\\pos({cx},{head_y})\\fad(250,150)}}{ttl}")
+        for k, p in enumerate((sl.get("points") or [])[:3]):
+            bs = min(t + 0.7 + 0.9 * k, end - 0.4)
+            ev.append(f"Dialogue: 2,{ass_time(bs)},{ass_time(end)},Body,,0,0,0,,"
+                      f"{{\\an8\\pos({cx},{body_y0 + k * gap})\\fad(300,100)}}\u200f• {esc(p)}")
+        ev.append(f"Dialogue: 2,{ass_time(t)},{ass_time(end)},Step,,0,0,0,,{{\\pos({W - 50},{110 if vertical else 80})}}گام {fa(i + 1)} از {fa(n)}")
+        ev.append(f"Dialogue: 3,{ass_time(t)},{ass_time(end)},Sub,,0,0,0,,{esc(text)}")
+        t = end
+    # کارت پایانی
+    ev.append(f"Dialogue: 2,{ass_time(intro + narr)},{ass_time(total)},Card,,0,0,0,,"
+              f"{{\\fad(400,0)}}{esc(BRAND)}\\Nتماس: {PHONE}\\N{MOBILE}\\N{SITE_SHORT}")
+    Path(path).write_text(head + "\n".join(ev), encoding="utf-8")
 
 
-def stock_video(query, W, H, work, name, used):
-    """یک فیلم استوک مرتبط از Pixabay می‌گیرد. اگر نشد None برمی‌گرداند."""
-    if not PIXABAY_API_KEY or not query:
-        return None
-    short = " ".join(query.split()[:2])
-    for q in dict.fromkeys([query, short]):
+def build_explainer(work, segments, slides, scenes, W, H, name, title, intro=3.2, outro=4.5):
+    bg = make_bg(work, W, H, name)
+    narr = sum(d for _, _, d in segments)
+    total = intro + narr + outro
+    enc = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-r", "30", "-pix_fmt", "yuv420p"]
+    dark = "drawbox=x=0:y=0:w=iw:h=ih:color=black@0.5:t=fill"
+
+    def graphic(d, tag):
+        out = f"g_{name}_{tag}.mp4"
+        frames = int(round(d * 30)) + 2
+        vf = f"zoompan=z='min(1+0.0004*on,1.12)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={W}x{H}:fps=30"
+        run(["ffmpeg", "-y", "-i", bg, "-vf", vf, "-t", f"{d:.3f}"] + enc + [out], cwd=work)
+        return out
+
+    clips = [graphic(intro, "intro")]
+    for i, (text, _, d) in enumerate(segments):
+        sc = scenes[i] if i < len(scenes) else None
+        out = f"s_{name}_{i}.mp4"
         try:
-            r = requests.get("https://pixabay.com/api/videos/", params={
-                "key": PIXABAY_API_KEY, "q": q[:100], "video_type": "film", "safesearch": "true",
-                "min_width": 1280, "per_page": 12}, timeout=60)
-            hits = [h for h in r.json().get("hits", []) if h["id"] not in used]
-            random.shuffle(hits)
-            for h in hits[:3]:
-                vs = h.get("videos", {})
-                for size in ("large", "medium"):
-                    v = vs.get(size) or {}
-                    if v.get("url") and (v.get("width") or 0) >= 1280:
-                        path = work / f"{name}.mp4"
-                        download(v["url"], path)
-                        used.add(h["id"])
-                        return path.name
+            if sc and sc[0] == "vid":
+                vf = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps=30,{dark}"
+                run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", sc[1], "-t", f"{d:.3f}", "-vf", vf, "-an"] + enc + [out], cwd=work)
+            elif sc and sc[0] == "img":
+                frames = int(round(d * 30)) + 2
+                sw, sh = int(W * 1.5) // 2 * 2, int(H * 1.5) // 2 * 2
+                z = "min(zoom+0.0007,1.12)" if i % 2 == 0 else "if(eq(on,1),1.12,max(zoom-0.0007,1.0))"
+                vf = (f"scale={sw}:{sh}:force_original_aspect_ratio=increase,crop={sw}:{sh},"
+                      f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={W}x{H}:fps=30,{dark}")
+                run(["ffmpeg", "-y", "-i", sc[1], "-vf", vf, "-t", f"{d:.3f}"] + enc + [out], cwd=work)
+            else:
+                out = graphic(d, f"seg{i}")
         except Exception as e:
-            print("pixabay video failed:", q, str(e)[:150])
-    return None
-
-
-def build_video(work, segments, sources, W, H, out_name, title=""):
-    clips = []
-    for i, ((text, wav, d), (kind, src)) in enumerate(zip(segments, sources)):
-        out = f"seg_{out_name}_{i}.mp4"
-        if kind == "vid":
-            vf = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps=30,format=yuv420p"
-            run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", src, "-t", f"{d:.2f}", "-vf", vf, "-an",
-                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", out], cwd=work)
-        else:
-            frames = int(d * 30) + 2
-            sw, sh = int(W * 1.5) // 2 * 2, int(H * 1.5) // 2 * 2
-            direction = "min(zoom+0.0007,1.12)" if i % 2 == 0 else "if(eq(on,1),1.12,max(zoom-0.0007,1.0))"
-            vf = (f"scale={sw}:{sh}:force_original_aspect_ratio=increase,crop={sw}:{sh},"
-                  f"zoompan=z='{direction}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={W}x{H}:fps=30,format=yuv420p")
-            run(["ffmpeg", "-y", "-i", src, "-vf", vf, "-t", f"{d:.2f}", "-r", "30", "-c:v", "libx264",
-                 "-preset", "veryfast", "-crf", "24", out], cwd=work)
+            print("scene failed, using graphic:", i, str(e)[:100])
+            out = graphic(d, f"seg{i}")
         clips.append(out)
-    (work / f"list_{out_name}.txt").write_text("".join(f"file '{c}'\n" for c in clips))
-    make_ass(segments, W, H, work / f"sub_{out_name}.ass", title)
-    final = f"{out_name}.mp4"
-    run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", f"list_{out_name}.txt", "-i", "audio.wav",
-         "-vf", f"ass=sub_{out_name}.ass", "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
-         "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", "-shortest", final], cwd=work)
-    return work / final
+    clips.append(graphic(outro, "outro"))
+    (work / f"list_{name}.txt").write_text("".join(f"file '{c}'\n" for c in clips))
+    run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", f"list_{name}.txt", "-c", "copy", f"base_{name}.mp4"], cwd=work)
+    make_explainer_ass(segments, slides, W, H, work / f"sub_{name}.ass", title, intro, outro)
+    ms = int(intro * 1000)
+    fc = (f"[1:a]adelay={ms}:all=1,apad=whole_dur={total:.2f}[a];[0:v]ass=sub_{name}.ass,format=yuv420p[v]")
+    out = f"{name}.mp4"
+    run(["ffmpeg", "-y", "-i", f"base_{name}.mp4", "-i", "audio.wav", "-filter_complex", fc,
+         "-map", "[v]", "-map", "[a]", "-t", f"{total:.2f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+         "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out], cwd=work)
+    return work / out
 
 
-def make_videos(art, image_infos, work):
-    narration = art["narration"]
-    sentences = split_sentences(narration)
+def make_videos(art, sentences, scene_ids, lib_by_id, work):
     segments = synth_all(sentences, work)
-    (work / "alist.txt").write_text("".join(f"file '{w}'\n" for _, w, _ in segments))
-    run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "alist.txt", "-c", "copy", "audio.wav"], cwd=work)
-    imgs = []
-    for i, info in enumerate(image_infos[:len(segments)]):
-        p = f"img{i}.jpg"
-        download(info["url"], work / p)
-        imgs.append(p)
-    queries = list(art.get("scene_queries") or []) + list(art.get("image_keywords") or [])
-    results = []
-    for name, W, H in (("vertical", 1080, 1920), ("horizontal", 1920, 1080)):
-        used, sources = set(), []
-        for i in range(len(segments)):
-            q = queries[i] if i < len(queries) else (queries[i % len(queries)] if queries else "")
-            clip = stock_video(q, W, H, work, f"clip_{name}_{i}", used)
-            sources.append(("vid", clip) if clip else ("img", imgs[i % len(imgs)]))
-        print(name, "scenes:", [k for k, _ in sources])
-        results.append(build_video(work, segments, sources, W, H, name, art["title"]))
-    return tuple(results)
+    segments = [(t, w, max(round(d * 30) / 30, 0.5)) for t, w, d in segments]
+    slides = art.get("slides") or []
+    scenes = []
+    for i in range(len(segments)):
+        sid = scene_ids[i] if i < len(scene_ids) else None
+        item = lib_by_id.get(sid) if sid else None
+        sc = None
+        if item:
+            try:
+                name = f"lib_{item['id']}" + (".mp4" if item["type"] == "video" else ".jpg")
+                download(item["url"], work / name)
+                sc = ("vid" if item["type"] == "video" else "img", name)
+            except Exception as e:
+                print("library download failed:", str(e)[:100])
+        scenes.append(sc)
+    print("video scenes:", [sc[0] if sc else "graphic" for sc in scenes])
+    vv = build_explainer(work, segments, slides, scenes, 1080, 1920, "vertical", art["title"])
+    vh = build_explainer(work, segments, slides, scenes, 1920, 1080, "horizontal", art["title"])
+    return vv, vh
+
+
+def still_ass(W, H, title, points, step):
+    vertical = H > W
+    square = abs(W - H) < 50
+    head_sz = 90 if vertical else (46 if square else 62)
+    body_sz = 60 if vertical else (30 if square else 42)
+    cx = W // 2
+    head_y = 420 if vertical else (90 if square else 110)
+    body_y0 = 760 if vertical else (230 if square else 270)
+    gap = 210 if vertical else (80 if square else 105)
+    head = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {W}
+PlayResY: {H}
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
+Style: Head,Vazirmatn,{head_sz},{ACCENT_ASS},&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,3,0,8,60,60,40,1
+Style: Body,Vazirmatn,{body_sz},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2,0,8,70,70,40,1
+Style: Mark,Vazirmatn,{int(body_sz*0.6)},{ACCENT_ASS},&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2,0,8,40,40,{60 if vertical else 24},1
+Style: Step,Vazirmatn,{int(body_sz*0.7)},{ACCENT_ASS},&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2,0,9,40,40,40,1
+
+[Events]
+Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+"""
+    ev = [f"Dialogue: 1,{ass_time(0)},{ass_time(9)},Mark,,0,0,0,,{{\\an8\\pos({cx},{60 if vertical else 24})}}{esc(BRAND)}  |  {SITE_SHORT}",
+          f"Dialogue: 2,{ass_time(0)},{ass_time(9)},Head,,0,0,0,,{{\\an8\\pos({cx},{head_y})}}{esc(title)}"]
+    for k, p in enumerate((points or [])[:3]):
+        ev.append(f"Dialogue: 2,{ass_time(0)},{ass_time(9)},Body,,0,0,0,,{{\\an8\\pos({cx},{body_y0 + k * gap})}}\u200f• {esc(p)}")
+    if step:
+        ev.append(f"Dialogue: 2,{ass_time(0)},{ass_time(9)},Step,,0,0,0,,{{\\pos({W - 50},{110 if vertical else 60})}}{esc(step)}")
+    return head + "\n".join(ev)
+
+
+def render_still(work, W, H, photo, title, points, out, step=None):
+    """یک تصویر ثابت (کارت گرافیکی یا عکس کتابخانه با نوشته) می‌سازد."""
+    Path(work / f"{out}.ass").write_text(still_ass(W, H, title, points, step), encoding="utf-8")
+    bg = photo or make_bg(work, W, H, f"still{W}x{H}")
+    vf = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}"
+    if photo:
+        vf += ",drawbox=x=0:y=0:w=iw:h=ih:color=black@0.5:t=fill"
+    vf += f",ass={out}.ass"
+    run(["ffmpeg", "-y", "-i", bg, "-vf", vf, "-frames:v", "1", "-q:v", "2", out], cwd=work)
+    return work / out
 
 
 # ---------------------------------------------------------------- wordpress
@@ -525,7 +702,7 @@ def upload(path, mime, title, alt=""):
                       data=path.read_bytes())
     r.raise_for_status()
     j = r.json()
-    requests.post(f"{API}/media/{j['id']}", auth=AUTH, json={"title": title, "alt_text": alt}, timeout=60)
+    requests.post(f"{API}/media/{j['id']}", auth=AUTH, json={"title": title, "alt_text": alt, "caption": alt, "description": "AUTO"}, timeout=60)
     return j["id"], j["source_url"]
 
 
@@ -538,95 +715,363 @@ def term(kind, name):
     return r.json()["id"] if r.ok else None
 
 
-def build_content(art, topic, videos, poster, internal_video_title):
-    h = ""
-    vids = [v for v in videos if v]
-    if vids:
-        h += "<h2>ویدیوی کوتاه این مقاله</h2>\n"
-        for label, url in vids:
-            h += (f'<figure class="wp-block-video"><video controls preload="metadata" playsinline '
-                  f'poster="{poster}" src="{url}"></video></figure>\n')
-    h += art["article_html"]
+def sanitize_html(h):
+    """متن مقاله را تمیز و برای موبایل مناسب می‌کند."""
+    h = (h or "").strip()
+    h = re.sub(r"^```(?:html)?\s*|\s*```$", "", h, flags=re.I).strip()
+    if h.count("&lt;") > 5 and "<h2" not in h:
+        h = html.unescape(h)
+    h = re.sub(r"(?is)<(script|style|iframe)\b.*?</\1>", "", h)
+    h = re.sub(r"(?is)<!doctype[^>]*>", "", h)
+    h = re.sub(r"(?is)</?(html|head|body|h1)\b[^>]*>", "", h)
+    h = re.sub(r"(?is)<table\b[^>]*>", '<table style="width:100%;border-collapse:collapse;font-size:15px">', h)
+    h = re.sub(r"(?is)<th\b[^>]*>", '<th style="border:1px solid #9fb3c8;background:#dbe8f5;color:#10263b;padding:8px;text-align:right">', h)
+    h = re.sub(r"(?is)<td\b[^>]*>", '<td style="border:1px solid #9fb3c8;background:#ffffff;color:#1b2a3a;padding:8px;text-align:right;vertical-align:top">', h)
+    h = re.sub(r"(?is)(<table\b.*?</table>)",
+               r'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin:16px 0">\1</div>', h)
+    return h
+
+
+PLACEHOLDER = (
+    '<!-- wp:html -->\n<div style="border:2px dashed #e0a800;padding:16px;margin:0 0 22px;text-align:center;'
+    'background:#fff8e1;color:#5c4400;font-weight:bold">📹 این کادر را باز کنید (Custom HTML) و کد ویدیوی آپارات را به جای این متن بگذارید.</div>\n<!-- /wp:html -->\n')
+
+
+def figure_html(url, alt, caption, dims=""):
+    return (f'<figure style="margin:18px 0;text-align:center"><img src="{url}" alt="{html.escape(alt)}"{dims} loading="lazy" '
+            f'style="max-width:100%;height:auto;border-radius:10px">'
+            f'<figcaption style="font-size:14px;opacity:.85">{html.escape(caption)}</figcaption></figure>')
+
+
+def insert_section_images(h, figs):
+    parts = re.split(r"(?i)(?=<h2\b)", h)
+    out = [parts[0]]
+    for idx, part in enumerate(parts[1:]):
+        if idx in figs:
+            m = re.search(r"(?is)</h2>.*?</p>", part)
+            if m:
+                part = part[:m.end()] + figs[idx] + part[m.end():]
+            else:
+                part = re.sub(r"(?is)</h2>", "</h2>" + figs[idx], part, count=1)
+        out.append(part)
+    return "".join(out)
+
+
+def add_toc(h):
+    """به هر تیتر h2 شناسه می‌دهد و فهرست سرفصل‌ها را می‌سازد."""
+    items = []
+
+    def rep(m):
+        items.append(strip_tags(m.group(2)))
+        return f'<h2 id="sec-{len(items)}"{m.group(1)}>{m.group(2)}</h2>'
+
+    h = re.sub(r"(?is)<h2\b([^>]*)>(.*?)</h2>", rep, h)
+    return h, items
+
+
+def build_content(art, figs, with_placeholder, banner_url="", related=None):
+    body, items = add_toc(insert_section_images(art["article_html"], figs))
+    h = PLACEHOLDER if with_placeholder else ""
+    h += '<div dir="rtl">\n'
+    if banner_url:
+        h += figure_html(banner_url, art["title"], "", ' width="1600" height="500"').replace("border-radius:10px", "border-radius:12px;width:100%")
+    pts = [p for p in (art.get("summary_points") or []) if str(p).strip()][:5]
+    if pts:
+        h += ('<div style="border:2px solid #1a6fb5;border-radius:12px;padding:16px;margin:18px 0;background:#eef6ff;color:#12263a">'
+              '<h2 style="margin-top:0;color:#0b3a66;font-size:20px">خلاصه مقاله</h2><ul style="color:#12263a;margin:0;padding-right:20px">'
+              + "".join(f"<li>{html.escape(str(p))}</li>" for p in pts) + "</ul></div>\n")
+    toc_items = items + (["سوالات متداول"] if art.get("faq") else [])
+    if len(toc_items) >= 3:
+        h += ('<nav style="border:1px solid #9fb3c8;border-radius:12px;padding:16px;margin:18px 0;background:#ffffff;color:#12263a">'
+              '<strong style="color:#0b3a66">سرفصل‌های مقاله</strong><ol style="color:#12263a;margin:8px 0 0;padding-right:22px">'
+              + "".join(f'<li><a href="#{"faq" if (art.get("faq") and k == len(toc_items) - 1) else "sec-" + str(k + 1)}" style="color:#0b5cab">{html.escape(t)}</a></li>'
+                        for k, t in enumerate(toc_items)) + "</ol></nav>\n")
+    h += body
     if art.get("faq"):
-        h += "<h2>سوالات متداول</h2>\n"
+        h += '\n<h2 id="faq">سوالات متداول</h2>\n'
         for f in art["faq"]:
             h += f"<h3>{html.escape(f['q'])}</h3>\n<p>{html.escape(f['a'])}</p>\n"
+    if related:
+        h += ('<div style="border:1px solid #9fb3c8;border-radius:12px;padding:16px;margin:24px 0;background:#ffffff;color:#12263a">'
+              '<strong style="color:#0b3a66">مطالب مرتبط</strong><ul style="color:#12263a;margin:8px 0 0;padding-right:20px">'
+              + "".join(f'<li><a href="{r["url"]}" style="color:#0b5cab">{html.escape(strip_tags(r["title"]))}</a></li>' for r in related[:4])
+              + "</ul></div>\n")
     h += f"""
-<div style="border:2px solid #1a6fb5;border-radius:12px;padding:18px;margin-top:30px;background:#f2f8ff">
-<h3>مشاوره و سفارش از {BRAND}</h3>
-<p>تلفن: <a href="tel:{PHONE}">{PHONE}</a> | موبایل: <a href="tel:{MOBILE}">{MOBILE}</a></p>
-<p>آدرس دفتر: {OFFICE}</p>
-<p>شماره جواز کسب: {LICENSE}</p>
+<div style="border:2px solid #1a6fb5;border-radius:12px;padding:18px;margin-top:30px;background:#f2f8ff;color:#12263a">
+<h3 style="color:#0b3a66;margin-top:0">مشاوره و سفارش از {BRAND}</h3>
+<p style="color:#12263a">تلفن: <a href="tel:{PHONE}" style="color:#0b5cab">{PHONE}</a> | موبایل: <a href="tel:{MOBILE}" style="color:#0b5cab">{MOBILE}</a></p>
+<p style="color:#12263a">آدرس دفتر: {OFFICE}</p>
+<p style="color:#12263a">شماره جواز کسب: {LICENSE}</p>
+</div>
 </div>"""
-    ld = []
-    if art.get("faq"):
-        ld.append({"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [
-            {"@type": "Question", "name": f["q"], "acceptedAnswer": {"@type": "Answer", "text": f["a"]}} for f in art["faq"]]})
-    for label, url in vids[:1]:
-        ld.append({"@context": "https://schema.org", "@type": "VideoObject", "name": art["title"],
-                   "description": art["meta_description"], "thumbnailUrl": poster, "contentUrl": url,
-                   "uploadDate": datetime.datetime.now().astimezone().isoformat()})
-    for o in ld:
-        h += f'\n<script type="application/ld+json">{json.dumps(o, ensure_ascii=False)}</script>'
     return h
+
+
+def set_rank_math(post_id, topic, art, image_url):
+    secondary = [t for t in (topic.get("kw2", []) + art.get("tags", []))[:4] if t and t != topic["kw"]]
+    meta = {"rank_math_title": f"%title% %sep% {BRAND}",
+            "rank_math_description": art["meta_description"],
+            "rank_math_focus_keyword": ",".join([topic["kw"]] + secondary),
+            "rank_math_facebook_title": art["title"],
+            "rank_math_facebook_description": art["meta_description"],
+            "rank_math_twitter_use_facebook": "on"}
+    if image_url:
+        meta["rank_math_facebook_image"] = image_url
+    try:
+        rm = requests.post(f"{SITE}/wp-json/rankmath/v1/updateMeta", auth=AUTH, timeout=60,
+                           json={"objectID": post_id, "objectType": "post", "meta": meta})
+        print("rankmath:", rm.status_code, rm.text[:120])
+    except Exception as e:
+        print("rankmath update failed:", type(e).__name__)
+
+
+# ---------------------------------------------------------------- telegram
+def tg_call(method, data, files=None):
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/{method}", data=data, files=files, timeout=900)
+        if not r.ok:
+            print("telegram error:", r.status_code, r.text[:200])
+        return r.ok
+    except Exception as e:
+        print("telegram failed:", type(e).__name__)
+        return False
+
+
+def fit_for_telegram(path):
+    path = Path(path)
+    if path.stat().st_size <= 48 * 1024 * 1024:
+        return path
+    out = path.with_name(path.stem + "_small.mp4")
+    run(["ffmpeg", "-y", "-i", str(path), "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
+         "-c:a", "aac", "-b:a", "96k", str(out)])
+    return out
+
+
+def send_to_telegram(art, article_url, vv, vh, post_id=0):
+    if not (TG_TOKEN and TG_CHAT):
+        print("telegram not configured: videos saved only as backup artifact")
+        return False
+    tags = " ".join("#" + re.sub(r"\s+", "_", str(t).strip().lstrip("#")) for t in (art.get("hashtags") or [])[:8])
+    msg = (f"📹 ویدیوی امروز {BRAND}\n\nعنوان ویدیو:\n{art.get('video_title') or art['title']}\n\n"
+           f"توضیحات ویدیو:\n{art.get('video_description', '')}\n\n{tags}\n\nلینک مقاله برای گذاشتن زیر ویدیو: {article_url}\nشناسه مقاله (برای مرحله آخر): {post_id}")
+    tg_call("sendMessage", {"chat_id": TG_CHAT, "text": msg[:4000]})
+    ok = True
+    for label, p in (("ویدیوی افقی: برای آپارات و داخل مقاله", vh), ("ویدیوی عمودی: برای یوتیوب Shorts", vv)):
+        try:
+            p = fit_for_telegram(p)
+            with open(p, "rb") as f:
+                ok = tg_call("sendVideo", {"chat_id": TG_CHAT, "caption": label, "supports_streaming": "true"},
+                             {"video": f}) and ok
+        except Exception as e:
+            print("telegram video failed:", type(e).__name__)
+            ok = False
+    return ok
+
+
+# ---------------------------------------------------------------- web story
+def story_html(title, poster_url, logo_url, pages, article_url):
+    t = html.escape(title, quote=True)
+    out = (f'<amp-story standalone title="{t}" publisher="{html.escape(BRAND, quote=True)}" '
+           f'publisher-logo-src="{logo_url}" poster-portrait-src="{poster_url}">')
+    for i, (img, alt) in enumerate(pages):
+        last = i == len(pages) - 1
+        out += (f'<amp-story-page id="page-{i + 1}" auto-advance-after="6s"><amp-story-grid-layer template="fill">'
+                f'<amp-img src="{img}" width="1080" height="1920" layout="fill" alt="{html.escape(alt, quote=True)}"></amp-img>'
+                f'</amp-story-grid-layer>')
+        if last and article_url:
+            out += f'<amp-story-page-outlink layout="nodisplay"><a href="{article_url}">مشاهده مقاله کامل</a></amp-story-page-outlink>'
+        out += '</amp-story-page>'
+    return out + '</amp-story>'
+
+
+def create_web_story(work, art, slides, story_ids, lib_by_id, article_url, base="article"):
+    """وب‌استوری را به صورت پیش‌نویس می‌سازد (نیاز به افزونه Web Stories)."""
+    pages, n = [], min(len(slides), 6)
+    for i in range(n):
+        sl = slides[i]
+        photo = None
+        item = lib_by_id.get(story_ids[i]) if i < len(story_ids) and story_ids[i] else None
+        if item and item["type"] == "image":
+            try:
+                photo = f"storybg_{i}.jpg"
+                download(item["large"], work / photo)
+            except Exception:
+                photo = None
+        name = f"{base}-story-{i + 1}.jpg"
+        render_still(work, 1080, 1920, photo, sl.get("title", ""), sl.get("points", []), name, step=f"{fa(i + 1)} / {fa(n)}")
+        _, url = upload(work / name, "image/jpeg", f"{art['title']} - {i + 1}", sl.get("title", art["title"]))
+        pages.append((url, sl.get("title", art["title"])))
+    render_still(work, 1080, 1920, None, BRAND, [f"تلفن: {PHONE}", f"موبایل: {MOBILE}", SITE_SHORT], f"{base}-story-contact.jpg")
+    _, url = upload(work / f"{base}-story-contact.jpg", "image/jpeg", f"{art['title']} - تماس", BRAND)
+    pages.append((url, f"تماس با {BRAND}"))
+    render_still(work, 960, 1280, None, art["title"], [], f"{base}-story-poster.jpg")
+    pid, poster_url = upload(work / f"{base}-story-poster.jpg", "image/jpeg", art["title"], art["title"])
+    logo_url = ""
+    try:
+        logo_url = requests.get(f"{SITE}/wp-json/", timeout=30).json().get("site_icon_url") or ""
+    except Exception:
+        pass
+    if not logo_url:
+        render_still(work, 512, 512, None, BRAND, [], f"{base}-logo.jpg")
+        _, logo_url = upload(work / f"{base}-logo.jpg", "image/jpeg", BRAND, BRAND)
+    content = story_html(art["title"], poster_url, logo_url, pages, article_url)
+    payload = {"title": art["title"], "status": "draft", "content": content, "featured_media": pid}
+    for ep in (f"{SITE}/wp-json/web-stories/v1/web-story", f"{API}/web-story"):
+        r = requests.post(ep, auth=AUTH, json=payload, timeout=120)
+        print("web story:", ep.split("/wp-json/")[1], r.status_code, r.text[:120] if not r.ok else "ok")
+        if r.ok:
+            return True
+    return False
+
+
+# ---------------------------------------------------------------- main
+def related_posts():
+    try:
+        r = requests.get(f"{API}/posts", params={"per_page": 6, "status": "publish", "_fields": "title,link"}, timeout=60)
+        return [{"title": p["title"]["rendered"], "url": p["link"]} for p in r.json()]
+    except Exception:
+        return []
 
 
 def main():
     state = load_state()
     topic = pick_topic(state)
-    print("topic:", topic["title"])
+    print("topic:", topic["title"], "| keyword:", topic["kw"])
     art = write_article(topic)
+    art["article_html"] = sanitize_html(art["article_html"])
     print("article:", art["title"])
 
+    slug = re.sub(r"[^a-z0-9-]+", "-", str(art.get("slug", "")).lower()).strip("-")[:60] or "article"
     work = Path(tempfile.mkdtemp())
-    n_img = max(len(split_sentences(art["narration"])), 4)
-    images = pick_images(n_img, art.get("image_keywords", []), state)
+    sentences = split_sentences(art["narration"])
+    heads_all = [strip_tags(x) for x in re.findall(r"(?is)<h2\b[^>]*>(.*?)</h2>", art["article_html"])]
+    cand = [i for i, hd in enumerate(heads_all) if not re.search(r"سوالات متداول|نتیجه", hd)][:6]
+    library = fetch_library()
+    lib_by_id = {i["id"]: i for i in library}
+    m = match_library(topic, sentences, [heads_all[i] for i in cand], library)
 
-    video_urls = []
-    featured_id = images[0]["id"]
-    featured_url = images[0]["url"]
+    vv = vh = None
     try:
-        vv, vh = make_videos(art, images, work)
-        for label, p in (("عمودی", vv), ("افقی", vh)):
-            try:
-                _, url = upload(p, "video/mp4", f"{art['title']} ({label})")
-                video_urls.append((label, url))
-            except Exception as e:
-                print("video upload failed:", e)
+        vv, vh = make_videos(art, sentences, m["video_scenes"], lib_by_id, work)
+        outdir = HERE / "out"
+        outdir.mkdir(exist_ok=True)
+        shutil.copy(vv, outdir / "vertical.mp4")
+        shutil.copy(vh, outdir / "horizontal.mp4")
     except Exception as e:
-        print("video creation failed, continuing with article only:", e)
+        print("video creation failed, continuing with article only:", str(e)[:200])
 
-    if featured_id is None:
-        p = work / "featured.jpg"
-        download(featured_url, p)
-        featured_id, featured_url = upload(p, "image/jpeg", art["title"], art.get("image_alt", art["title"]))
+    # تصویر شاخص: عکس مرتبط کتابخانه، وگرنه کارت گرافیکی
+    featured_id, featured_url = None, ""
+    if m["featured"] and m["featured"] in lib_by_id:
+        featured_id, featured_url = m["featured"], lib_by_id[m["featured"]]["url"]
     else:
-        requests.post(f"{API}/media/{featured_id}", auth=AUTH, json={"alt_text": art.get("image_alt", art["title"])}, timeout=60)
+        try:
+            cover = render_still(work, 1280, 720, None, art["title"], [], f"{slug}-cover.jpg")
+            featured_id, featured_url = upload(cover, "image/jpeg", art["title"], art.get("image_alt", art["title"]))
+        except Exception as e:
+            print("cover failed:", str(e)[:150])
 
-    content = build_content(art, topic, video_urls, featured_url, art["title"])
+    # بنر بالای مقاله
+    banner_url = ""
+    try:
+        bn = render_still(work, 1600, 500, None, art["title"], [], f"{slug}-banner.jpg")
+        _, banner_url = upload(bn, "image/jpeg", art["title"], f"بنر {art['title']}")
+    except Exception as e:
+        print("banner failed:", str(e)[:150])
+
+    # عکس هر بخش مقاله
+    figs, cards = {}, 0
+    for pos, i in enumerate(cand):
+        try:
+            sid = m["section_media"][pos] if pos < len(m["section_media"]) else None
+            item = lib_by_id.get(sid) if sid else None
+            if item:
+                figs[i] = figure_html(item["large"], item["alt"], item["label"][:120])
+            elif cards < 4 and pos < len(m["section_points"]) and m["section_points"][pos]:
+                jpg = render_still(work, 1280, 720, None, heads_all[i], m["section_points"][pos], f"{slug}-section-{pos + 1}.jpg")
+                _, url = upload(jpg, "image/jpeg", heads_all[i], f"{heads_all[i]} - {art['title']}")
+                figs[i] = figure_html(url, f"{heads_all[i]} - {art['title']}", heads_all[i], ' width="1280" height="720"')
+                cards += 1
+        except Exception as e:
+            print("section image failed:", str(e)[:150])
+
+    content = build_content(art, figs, with_placeholder=bool(vh and TG_TOKEN and TG_CHAT),
+                            banner_url=banner_url, related=related_posts())
     cats = [c for c in [term("categories", topic["cat"])] if c]
     tags = [t for t in (term("tags", x) for x in art.get("tags", [])[:5]) if t]
-    r = requests.post(f"{API}/posts", auth=AUTH, timeout=120, json={
-        "title": art["title"], "slug": art["slug"], "content": content, "excerpt": art["meta_description"],
-        "status": POST_STATUS, "categories": cats, "tags": tags, "featured_media": featured_id})
+    payload = {"title": art["title"], "content": content, "excerpt": art["meta_description"],
+               "status": POST_STATUS, "categories": cats, "tags": tags, "slug": slug}
+    if featured_id:
+        payload["featured_media"] = featured_id
+    r = requests.post(f"{API}/posts", auth=AUTH, timeout=120, json=payload)
     r.raise_for_status()
     post = r.json()
-    print("created:", post["link"], POST_STATUS)
+    article_url = f"{SITE}/?p={post['id']}"
+    print("created:", article_url, POST_STATUS)
+    set_rank_math(post["id"], topic, art, featured_url)
 
-    # Rank Math SEO fields (best effort)
+    if vv and vh:
+        send_to_telegram(art, article_url, vv, vh, post["id"])
     try:
-        rm = requests.post(f"{SITE}/wp-json/rankmath/v1/updateMeta", auth=AUTH, timeout=60, json={
-            "objectID": post["id"], "objectType": "post", "meta": {
-                "rank_math_focus_keyword": topic["kw"], "rank_math_description": art["meta_description"],
-                "rank_math_title": f"%title% %sep% {BRAND}"}})
-        print("rankmath:", rm.status_code)
+        create_web_story(work, art, art.get("slides") or [], m["story_media"], lib_by_id, article_url, slug)
     except Exception as e:
-        print("rankmath update failed:", e)
+        print("web story failed:", str(e)[:200])
 
     state["done"].append(topic["title"])
-    state["used_images"] = (state.get("used_images", []) + [i["id"] for i in images if i["id"]])[-60:]
     save_state(state)
 
 
+# ---------------------------------------------------------------- attach (after you upload to Aparat / YouTube)
+def youtube_id(url):
+    m = re.search(r"(?:youtu\.be/|v=|/shorts/|/embed/)([A-Za-z0-9_-]{11})", url or "")
+    return m.group(1) if m else ""
+
+
+def attach():
+    pid = os.environ.get("POST_ID", "").strip()
+    aparat = os.environ.get("APARAT_URL", "").strip()
+    embed = os.environ.get("APARAT_EMBED", "").strip()
+    yt = os.environ.get("YOUTUBE_URL", "").strip()
+    shorts = os.environ.get("SHORTS_URL", "").strip()
+    publish = os.environ.get("PUBLISH", "no").strip().lower() == "yes"
+    if not pid:
+        raise SystemExit("POST_ID is empty")
+    r = requests.get(f"{API}/posts/{pid}", params={"context": "edit"}, auth=AUTH, timeout=60)
+    r.raise_for_status()
+    raw = r.json()["content"]["raw"]
+    block = ""
+    if embed:
+        block += f'<div style="max-width:100%;margin:0 0 18px">{embed}</div>'
+    ytid = youtube_id(yt)
+    if ytid:
+        block += (f'<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;margin:0 0 18px">'
+                  f'<iframe src="https://www.youtube.com/embed/{ytid}" title="ویدیو" loading="lazy" allowfullscreen '
+                  f'style="position:absolute;top:0;left:0;width:100%;height:100%;border:0"></iframe></div>')
+    links = []
+    if aparat:
+        links.append(f'<a href="{aparat}" target="_blank" rel="noopener">مشاهده این ویدیو در آپارات</a>')
+    if yt:
+        links.append(f'<a href="{yt}" target="_blank" rel="noopener">مشاهده در یوتیوب</a>')
+    if shorts:
+        links.append(f'<a href="{shorts}" target="_blank" rel="noopener">نسخه کوتاه (Shorts)</a>')
+    if links:
+        block += '<p style="margin:0 0 18px">🎬 ' + " | ".join(links) + "</p>"
+    pattern = r"<!-- wp:html -->\s*<div[^>]*dashed[^>]*>.*?</div>\s*<!-- /wp:html -->"
+    new_block = f"<!-- wp:html -->\n{block}\n<!-- /wp:html -->\n"
+    if re.search(pattern, raw, flags=re.S):
+        new = re.sub(pattern, lambda _m: new_block, raw, count=1, flags=re.S)
+    else:
+        new = new_block + raw
+    payload = {"content": new}
+    if publish:
+        payload["status"] = "publish"
+    r = requests.post(f"{API}/posts/{pid}", auth=AUTH, json=payload, timeout=120)
+    r.raise_for_status()
+    print("updated post", pid, "| published:", publish, "|", r.json().get("link"))
+
+
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "attach":
+        attach()
+    else:
+        main()
