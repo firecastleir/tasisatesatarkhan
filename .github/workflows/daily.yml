@@ -27,6 +27,7 @@ jobs:
           WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          GEMINI_TTS_VOICE: Kore
           POST_STATUS: draft
         run: python main.py
       - name: Save state
