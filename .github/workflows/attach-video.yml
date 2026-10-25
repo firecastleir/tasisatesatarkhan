@@ -1,0 +1,46 @@
+name: attach-video
+on:
+  workflow_dispatch:
+    inputs:
+      post_id:
+        description: "شناسه مقاله (از پیام تلگرام)"
+        required: true
+      aparat_url:
+        description: "لینک ویدیو در آپارات"
+        required: false
+      aparat_embed:
+        description: "کد جاسازی آپارات (اختیاری)"
+        required: false
+      youtube_url:
+        description: "لینک ویدیوی افقی در یوتیوب (اختیاری)"
+        required: false
+      shorts_url:
+        description: "لینک ویدیوی عمودی در یوتیوب Shorts (اختیاری)"
+        required: false
+      publish:
+        description: "انتشار مقاله؟ بنویسید yes یا no"
+        required: true
+        default: "no"
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests edge-tts
+      - name: Attach videos to the post
+        env:
+          WP_SITE: https://tasisatesatarkhan.ir
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          POST_ID: ${{ inputs.post_id }}
+          APARAT_URL: ${{ inputs.aparat_url }}
+          APARAT_EMBED: ${{ inputs.aparat_embed }}
+          YOUTUBE_URL: ${{ inputs.youtube_url }}
+          SHORTS_URL: ${{ inputs.shorts_url }}
+          PUBLISH: ${{ inputs.publish }}
+        run: python main.py attach
