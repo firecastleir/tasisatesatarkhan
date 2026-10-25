@@ -86,13 +86,18 @@ TOPICS = [
     T("نگهداری از نرده استیل و جلوگیری از لکه و زنگ‌زدگی", CAT_RAIL, "نگهداری نرده استیل"),
 ]
 
+# رنگ‌های ویدیو (BGR برای زیرنویس) و پس‌زمینه (RGB)
+ACCENT_ASS = "&H0045C4F5"      # زرد کهربایی
+ACCENT_BAR = "&H0045C4F5"
+BG_TOP = (9, 30, 58)           # بالای پس‌زمینه
+BG_BOTTOM = (26, 76, 135)      # پایین پس‌زمینه
+
 # ============================================================
 
 AUTH = (WP_USER, WP_APP_PASSWORD)
 API = f"{SITE}/wp-json/wp/v2"
 HERE = Path(__file__).parent
 STATE_FILE = HERE / "state.json"
-COPPER_ASS = "&H00B5701A"  # آبی تیره (BGR)
 
 
 # ---------------------------------------------------------------- helpers
@@ -232,11 +237,11 @@ def write_article(topic):
 - در انتها دعوت به مشاوره با {BRAND} بیاور (بدون شماره تلفن؛ شماره را سیستم اضافه می‌کند).
 - ۲ تا ۳ لینک داخلی فقط از این فهرست و فقط اگر مرتبط‌اند، با تگ a: {json.dumps(internal, ensure_ascii=False)}
 - متن روایت ویدیو (narration): ۱۳۰ تا ۱۶۰ کلمه، حداکثر ۷ جمله، گفتاری، طبیعی و فنی ولی ساده برای گوینده، هر جمله حداکثر ۲۰ کلمه و با نقطه تمام‌شونده. برای خوانده‌شدن درست توسط موتور تبدیل متن به گفتار: همه عددها را با حروف بنویس، هیچ کلمه انگلیسی، مخفف، علامت و ایموجی نیاور، از کلمه‌های ساده و رایج فارسی معیار و املای استاندارد با نیم‌فاصله درست استفاده کن. بدون آدرس سایت و شماره. شروع جذاب و پایان با دعوت به مشاوره با {BRAND}.
-- scene_queries: به تعداد جمله‌های narration (به ترتیب)، هر کدام یک عبارت کوتاه انگلیسی (۲ تا ۴ کلمه) برای جستجوی فیلم استوک مرتبط با همان جمله، مثل: plumber repairing pipe, boiler maintenance, radiator heating, air conditioner installation. بدون نام برند.
+- slides: به تعداد جمله‌های narration (به ترتیب)، برای هر جمله یک شیء با کلیدهای title (عنوان کوتاه فارسی حداکثر ۵ کلمه) و points (۲ تا ۳ نکته بسیار کوتاه فارسی، هرکدام حداکثر ۷ کلمه، دقیقاً مطابق همان جمله). این‌ها روی صفحه ویدیو نمایش داده می‌شوند، پس باید دقیق، فنی و بدون غلط باشند.
 
 فقط JSON با این کلیدها:
 title (حداکثر ۶۰ کاراکتر، شامل کلمه کلیدی), slug (انگلیسی کوچک با خط تیره), meta_description (۱۲۰ تا ۱۵۵ کاراکتر شامل کلمه کلیدی),
-tags (۳ تا ۵ برچسب فارسی), article_html, faq (لیست ۶ شیء با q و a، پاسخ‌های دقیق و کامل در ۲ تا ۴ جمله), narration, scene_queries, image_keywords (۳ عبارت انگلیسی برای جستجوی عکس), image_alt (متن جایگزین فارسی عکس شاخص)"""
+tags (۳ تا ۵ برچسب فارسی), article_html, faq (لیست ۶ شیء با q و a، پاسخ‌های دقیق و کامل در ۲ تا ۴ جمله), narration, slides, image_keywords (۳ عبارت انگلیسی برای جستجوی عکس), image_alt (متن جایگزین فارسی عکس شاخص)"""
     art = gemini(prompt)
     return review_article(art, topic)
 
@@ -264,20 +269,6 @@ def review_article(art, topic):
 
 
 # ---------------------------------------------------------------- images
-def wp_images():
-    out = []
-    try:
-        r = requests.get(f"{API}/media", params={"per_page": 100, "media_type": "image",
-                                                 "_fields": "id,source_url,media_details"}, auth=AUTH, timeout=60)
-        for m in r.json():
-            d = m.get("media_details") or {}
-            if d.get("width", 0) >= 800:
-                out.append({"id": m["id"], "url": m["source_url"]})
-    except Exception as e:
-        print("media list failed", e)
-    return out
-
-
 def pixabay_photos(query, n=2):
     if not PIXABAY_API_KEY:
         return []
@@ -291,23 +282,6 @@ def pixabay_photos(query, n=2):
     except Exception as e:
         print("pixabay photo failed:", str(e)[:150])
         return []
-
-
-def pick_images(n, keywords, state):
-    lib = wp_images()
-    used = set(state.get("used_images", []))
-    fresh = [i for i in lib if i["id"] not in used]
-    random.shuffle(fresh)
-    random.shuffle(lib)
-    chosen = (fresh + [i for i in lib if i not in fresh])[:n]
-    if len(chosen) < n:
-        for k in keywords:
-            chosen += pixabay_photos(k)
-    if not chosen:
-        raise RuntimeError("no images available (upload photos to the media library or set PIXABAY_API_KEY)")
-    while len(chosen) < n:
-        chosen.append(chosen[len(chosen) % len(chosen)])
-    return chosen[:n]
 
 
 def download(url, path):
@@ -434,10 +408,37 @@ def ass_time(t):
     return f"{int(h)}:{int(m):02d}:{s:05.2f}"
 
 
-def make_ass(segments, W, H, path, title=""):
+def fa(n):
+    return str(n).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+
+
+def esc(t):
+    """متن را برای زیرنویس تمیز می‌کند و جهت راست‌به‌چپ را مشخص می‌کند."""
+    t = re.sub(r"[{}\\]", "", str(t or "")).replace("\n", " ").strip()
+    return ("\u200f" + t + "\u200f") if t else t
+
+
+def make_bg(work, W, H, name):
+    (r0, g0, b0), (r1, g1, b1) = BG_TOP, BG_BOTTOM
+    vf = (f"format=gbrp,geq=r='{r0}+({r1}-{r0})*Y/{H}':g='{g0}+({g1}-{g0})*Y/{H}':b='{b0}+({b1}-{b0})*Y/{H}',"
+          f"format=rgb24")
+    run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=black:s={W}x{H}:d=1", "-vf", vf, "-frames:v", "1",
+         f"bg_{name}.png"], cwd=work)
+    return f"bg_{name}.png"
+
+
+def make_explainer_ass(segments, slides, W, H, path, title, intro, outro):
     vertical = H > W
-    size = 62 if vertical else 50
-    marginv = 420 if vertical else 70
+    head_sz = 90 if vertical else 68
+    body_sz = 60 if vertical else 46
+    sub_sz = 48 if vertical else 38
+    sub_mv = 250 if vertical else 60
+    cx = W // 2
+    head_y = 330 if vertical else 140
+    body_y0 = 610 if vertical else 320
+    gap = 200 if vertical else 110
+    narr = sum(d for _, _, d in segments)
+    total = intro + narr + outro
     head = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {W}
@@ -446,100 +447,71 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: Sub,Vazirmatn,{size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H96000000,1,0,0,0,100,100,0,0,3,3,0,2,90,90,{marginv},1
-Style: Mark,Vazirmatn,{int(size*0.55)},{COPPER_ASS},&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2,0,8,40,40,{80 if vertical else 40},1
-Style: Card,Vazirmatn,{int(size*1.1)},&H00FFFFFF,&H00FFFFFF,{COPPER_ASS},&H00000000,1,0,0,0,100,100,0,0,3,10,0,5,100,100,40,1
+Style: Head,Vazirmatn,{head_sz},{ACCENT_ASS},&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,3,0,8,90,90,40,1
+Style: Body,Vazirmatn,{body_sz},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2,0,8,100,100,40,1
+Style: Sub,Vazirmatn,{sub_sz},&H00FFFFFF,&H00FFFFFF,&H78000000,&H96000000,1,0,0,0,100,100,0,0,3,3,0,2,90,90,{sub_mv},1
+Style: Mark,Vazirmatn,{int(body_sz*0.6)},{ACCENT_ASS},&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2,0,8,40,40,{60 if vertical else 30},1
+Style: Card,Vazirmatn,{head_sz},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,3,0,5,100,100,40,1
+Style: Step,Vazirmatn,{int(body_sz*0.7)},{ACCENT_ASS},&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2,0,9,40,40,40,1
+Style: Bar,Vazirmatn,20,{ACCENT_BAR},&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,9,0,0,0,1
 
 [Events]
-Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Encoding_unused,Text
+Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 """
-    head = head.replace("Encoding_unused", "Effect")
-    total = sum(d for _, _, d in segments)
-    lines = [f"Dialogue: 1,{ass_time(0)},{ass_time(total)},Mark,,0,0,0,,{BRAND}  |  {SITE_SHORT}"]
-    t = 0.0
-    for text, _, d in segments:
-        lines.append(f"Dialogue: 0,{ass_time(t)},{ass_time(t + d)},Sub,,0,0,0,,{text}")
-        t += d
-    clean = re.sub(r"[{}\\]", "", title)
-    if clean:
-        lines.append(f"Dialogue: 2,{ass_time(0.2)},{ass_time(min(3.6, total))},Card,,0,0,0,,{clean}")
-    if total > 8:
-        lines.append(f"Dialogue: 2,{ass_time(total - 4.2)},{ass_time(total)},Card,,0,0,0,,{BRAND}\\Nتماس: {PHONE}")
-    Path(path).write_text(head + "\n".join(lines), encoding="utf-8")
+    ev = []
+    # برند بالای صفحه در تمام مدت
+    ev.append(f"Dialogue: 1,{ass_time(0)},{ass_time(total)},Mark,,0,0,0,,{{\\an8\\pos({cx},{60 if vertical else 28})}}{esc(BRAND)}  |  {SITE_SHORT}")
+    # کارت عنوان (ابتدا)
+    ev.append(f"Dialogue: 2,{ass_time(0.2)},{ass_time(intro)},Card,,0,0,0,,{{\\fad(450,350)}}{esc(title)}")
+    # نوار پیشرفت
+    bar_h = 14
+    ev.append(f"Dialogue: 1,{ass_time(intro)},{ass_time(intro + narr)},Bar,,0,0,0,,"
+              f"{{\\an9\\pos({W},0)\\p1\\fscx1\\t(0,{int(narr * 1000)},\\fscx100)}}m 0 0 l {W} 0 l {W} {bar_h} l 0 {bar_h}{{\\p0}}")
+    t = intro
+    n = len(segments)
+    for i, (text, _, d) in enumerate(segments):
+        end = t + d
+        sl = slides[i] if i < len(slides) else {}
+        ttl = esc(sl.get("title") or " ".join(text.split()[:5]))
+        ev.append(f"Dialogue: 2,{ass_time(t)},{ass_time(end)},Head,,0,0,0,,{{\\an8\\pos({cx},{head_y})\\fad(250,150)}}{ttl}")
+        for k, p in enumerate((sl.get("points") or [])[:3]):
+            bs = min(t + 0.7 + 0.9 * k, end - 0.4)
+            ev.append(f"Dialogue: 2,{ass_time(bs)},{ass_time(end)},Body,,0,0,0,,"
+                      f"{{\\an8\\pos({cx},{body_y0 + k * gap})\\fad(300,100)}}\u200f• {esc(p)}")
+        ev.append(f"Dialogue: 2,{ass_time(t)},{ass_time(end)},Step,,0,0,0,,{{\\pos({W - 50},{110 if vertical else 80})}}گام {fa(i + 1)} از {fa(n)}")
+        ev.append(f"Dialogue: 3,{ass_time(t)},{ass_time(end)},Sub,,0,0,0,,{esc(text)}")
+        t = end
+    # کارت پایانی
+    ev.append(f"Dialogue: 2,{ass_time(intro + narr)},{ass_time(total)},Card,,0,0,0,,"
+              f"{{\\fad(400,0)}}{esc(BRAND)}\\Nتماس: {PHONE}\\N{MOBILE}\\N{SITE_SHORT}")
+    Path(path).write_text(head + "\n".join(ev), encoding="utf-8")
 
 
-def stock_video(query, W, H, work, name, used):
-    """یک فیلم استوک مرتبط از Pixabay می‌گیرد. اگر نشد None برمی‌گرداند."""
-    if not PIXABAY_API_KEY or not query:
-        return None
-    short = " ".join(query.split()[:2])
-    for q in dict.fromkeys([query, short]):
-        try:
-            r = requests.get("https://pixabay.com/api/videos/", params={
-                "key": PIXABAY_API_KEY, "q": q[:100], "video_type": "film", "safesearch": "true",
-                "min_width": 1280, "per_page": 12}, timeout=60)
-            hits = [h for h in r.json().get("hits", []) if h["id"] not in used]
-            random.shuffle(hits)
-            for h in hits[:3]:
-                vs = h.get("videos", {})
-                for size in ("large", "medium"):
-                    v = vs.get(size) or {}
-                    if v.get("url") and (v.get("width") or 0) >= 1280:
-                        path = work / f"{name}.mp4"
-                        download(v["url"], path)
-                        used.add(h["id"])
-                        return path.name
-        except Exception as e:
-            print("pixabay video failed:", q, str(e)[:150])
-    return None
+def build_explainer(work, segments, slides, W, H, name, title, intro=3.2, outro=4.5):
+    bg = make_bg(work, W, H, name)
+    narr = sum(d for _, _, d in segments)
+    total = intro + narr + outro
+    make_explainer_ass(segments, slides, W, H, work / f"sub_{name}.ass", title, intro, outro)
+    ms = int(intro * 1000)
+    fc = (f"[1:a]adelay={ms}:all=1,apad=whole_dur={total:.2f}[a];"
+          f"[0:v]zoompan=z='min(1+0.00035*on,1.14)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={W}x{H}:fps=30,"
+          f"ass=sub_{name}.ass,format=yuv420p[v]")
+    out = f"{name}.mp4"
+    run(["ffmpeg", "-y", "-loop", "1", "-framerate", "30", "-i", bg, "-i", "audio.wav", "-filter_complex", fc,
+         "-map", "[v]", "-map", "[a]", "-t", f"{total:.2f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+         "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out], cwd=work)
+    return work / out
 
 
-def build_video(work, segments, sources, W, H, out_name, title=""):
-    clips = []
-    for i, ((text, wav, d), (kind, src)) in enumerate(zip(segments, sources)):
-        out = f"seg_{out_name}_{i}.mp4"
-        if kind == "vid":
-            vf = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps=30,format=yuv420p"
-            run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", src, "-t", f"{d:.2f}", "-vf", vf, "-an",
-                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", out], cwd=work)
-        else:
-            frames = int(d * 30) + 2
-            sw, sh = int(W * 1.5) // 2 * 2, int(H * 1.5) // 2 * 2
-            direction = "min(zoom+0.0007,1.12)" if i % 2 == 0 else "if(eq(on,1),1.12,max(zoom-0.0007,1.0))"
-            vf = (f"scale={sw}:{sh}:force_original_aspect_ratio=increase,crop={sw}:{sh},"
-                  f"zoompan=z='{direction}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={W}x{H}:fps=30,format=yuv420p")
-            run(["ffmpeg", "-y", "-i", src, "-vf", vf, "-t", f"{d:.2f}", "-r", "30", "-c:v", "libx264",
-                 "-preset", "veryfast", "-crf", "24", out], cwd=work)
-        clips.append(out)
-    (work / f"list_{out_name}.txt").write_text("".join(f"file '{c}'\n" for c in clips))
-    make_ass(segments, W, H, work / f"sub_{out_name}.ass", title)
-    final = f"{out_name}.mp4"
-    run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", f"list_{out_name}.txt", "-i", "audio.wav",
-         "-vf", f"ass=sub_{out_name}.ass", "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
-         "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", "-shortest", final], cwd=work)
-    return work / final
-
-
-def make_videos(art, image_infos, work):
-    narration = art["narration"]
-    sentences = split_sentences(narration)
+def make_videos(art, work):
+    sentences = split_sentences(art["narration"])
     segments = synth_all(sentences, work)
-    imgs = []
-    for i, info in enumerate(image_infos[:len(segments)]):
-        p = f"img{i}.jpg"
-        download(info["url"], work / p)
-        imgs.append(p)
-    queries = list(art.get("scene_queries") or []) + list(art.get("image_keywords") or [])
-    results = []
-    for name, W, H in (("vertical", 1080, 1920), ("horizontal", 1920, 1080)):
-        used, sources = set(), []
-        for i in range(len(segments)):
-            q = queries[i] if i < len(queries) else (queries[i % len(queries)] if queries else "")
-            clip = stock_video(q, W, H, work, f"clip_{name}_{i}", used)
-            sources.append(("vid", clip) if clip else ("img", imgs[i % len(imgs)]))
-        print(name, "scenes:", [k for k, _ in sources])
-        results.append(build_video(work, segments, sources, W, H, name, art["title"]))
-    return tuple(results)
+    slides = art.get("slides") or []
+    vv = build_explainer(work, segments, slides, 1080, 1920, "vertical", art["title"])
+    vh = build_explainer(work, segments, slides, 1920, 1080, "horizontal", art["title"])
+    cover = work / "cover.jpg"
+    run(["ffmpeg", "-y", "-ss", "1.6", "-i", str(vh), "-frames:v", "1", "-q:v", "2", str(cover)])
+    return vv, vh, cover
 
 
 # ---------------------------------------------------------------- wordpress
@@ -573,8 +545,8 @@ def sanitize_html(h):
     h = re.sub(r"(?is)<!doctype[^>]*>", "", h)
     h = re.sub(r"(?is)</?(html|head|body|h1)\b[^>]*>", "", h)
     h = re.sub(r"(?is)<table\b[^>]*>", '<table style="width:100%;border-collapse:collapse;font-size:15px">', h)
-    h = re.sub(r"(?is)<th\b[^>]*>", '<th style="border:1px solid #cfd8e3;background:#eef4fb;padding:8px;text-align:right">', h)
-    h = re.sub(r"(?is)<td\b[^>]*>", '<td style="border:1px solid #cfd8e3;padding:8px;text-align:right;vertical-align:top">', h)
+    h = re.sub(r"(?is)<th\b[^>]*>", '<th style="border:1px solid #9fb3c8;background:#dbe8f5;color:#10263b;padding:8px;text-align:right">', h)
+    h = re.sub(r"(?is)<td\b[^>]*>", '<td style="border:1px solid #9fb3c8;background:#ffffff;color:#1b2a3a;padding:8px;text-align:right;vertical-align:top">', h)
     h = re.sub(r"(?is)(<table\b.*?</table>)",
                r'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin:16px 0">\1</div>', h)
     return h
@@ -593,11 +565,11 @@ def build_content(art, topic, videos, poster, internal_video_title):
         for f in art["faq"]:
             h += f"<h3>{html.escape(f['q'])}</h3>\n<p>{html.escape(f['a'])}</p>\n"
     h += f"""
-<div style="border:2px solid #1a6fb5;border-radius:12px;padding:18px;margin-top:30px;background:#f2f8ff">
-<h3>مشاوره و سفارش از {BRAND}</h3>
-<p>تلفن: <a href="tel:{PHONE}">{PHONE}</a> | موبایل: <a href="tel:{MOBILE}">{MOBILE}</a></p>
-<p>آدرس دفتر: {OFFICE}</p>
-<p>شماره جواز کسب: {LICENSE}</p>
+<div style="border:2px solid #1a6fb5;border-radius:12px;padding:18px;margin-top:30px;background:#f2f8ff;color:#12263a">
+<h3 style="color:#0b3a66;margin-top:0">مشاوره و سفارش از {BRAND}</h3>
+<p style="color:#12263a">تلفن: <a href="tel:{PHONE}" style="color:#0b5cab">{PHONE}</a> | موبایل: <a href="tel:{MOBILE}" style="color:#0b5cab">{MOBILE}</a></p>
+<p style="color:#12263a">آدرس دفتر: {OFFICE}</p>
+<p style="color:#12263a">شماره جواز کسب: {LICENSE}</p>
 </div>
 </div>"""
     return h
@@ -611,14 +583,11 @@ def main():
     print("article:", art["title"])
 
     work = Path(tempfile.mkdtemp())
-    n_img = max(len(split_sentences(art["narration"])), 4)
-    images = pick_images(n_img, art.get("image_keywords", []), state)
-
     video_urls = []
-    featured_id = images[0]["id"]
-    featured_url = images[0]["url"]
+    featured_id, featured_url = None, ""
     try:
-        vv, vh = make_videos(art, images, work)
+        vv, vh, cover = make_videos(art, work)
+        featured_id, featured_url = upload(cover, "image/jpeg", art["title"], art.get("image_alt", art["title"]))
         for label, p in (("عمودی", vv), ("افقی", vh)):
             try:
                 _, url = upload(p, "video/mp4", f"{art['title']} ({label})")
@@ -629,18 +598,23 @@ def main():
         print("video creation failed, continuing with article only:", e)
 
     if featured_id is None:
-        p = work / "featured.jpg"
-        download(featured_url, p)
-        featured_id, featured_url = upload(p, "image/jpeg", art["title"], art.get("image_alt", art["title"]))
-    else:
-        requests.post(f"{API}/media/{featured_id}", auth=AUTH, json={"alt_text": art.get("image_alt", art["title"])}, timeout=60)
+        for k in art.get("image_keywords", [])[:2]:
+            ph = pixabay_photos(k, 1)
+            if ph:
+                try:
+                    p = work / "featured.jpg"
+                    download(ph[0]["url"], p)
+                    featured_id, featured_url = upload(p, "image/jpeg", art["title"], art.get("image_alt", art["title"]))
+                    break
+                except Exception as e:
+                    print("featured image failed:", str(e)[:150])
 
     content = build_content(art, topic, video_urls, featured_url, art["title"])
     cats = [c for c in [term("categories", topic["cat"])] if c]
     tags = [t for t in (term("tags", x) for x in art.get("tags", [])[:5]) if t]
     r = requests.post(f"{API}/posts", auth=AUTH, timeout=120, json={
         "title": art["title"], "slug": art["slug"], "content": content, "excerpt": art["meta_description"],
-        "status": POST_STATUS, "categories": cats, "tags": tags, "featured_media": featured_id})
+        "status": POST_STATUS, "categories": cats, "tags": tags, "featured_media": featured_id or 0})
     r.raise_for_status()
     post = r.json()
     print("created:", post["link"], POST_STATUS)
@@ -656,7 +630,6 @@ def main():
         print("rankmath update failed:", e)
 
     state["done"].append(topic["title"])
-    state["used_images"] = (state.get("used_images", []) + [i["id"] for i in images if i["id"]])[-60:]
     save_state(state)
 
 
