@@ -26,10 +26,19 @@ jobs:
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GEMINI_TTS_VOICE: Kore
           POST_STATUS: draft
         run: python main.py
+      - name: Backup videos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: videos
+          path: out/
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Save state
         run: |
           git config user.name "content-bot"
