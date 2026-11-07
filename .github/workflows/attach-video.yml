@@ -43,4 +43,4 @@ jobs:
           YOUTUBE_URL: ${{ inputs.youtube_url }}
           SHORTS_URL: ${{ inputs.shorts_url }}
           PUBLISH: ${{ inputs.publish }}
-        run: python main.py attach
+        run: python run.py attach
