@@ -32,7 +32,9 @@ jobs:
           python-version: "3.12"
       - run: pip install requests edge-tts
       - name: Attach videos to the post
+        timeout-minutes: 3
         env:
+          PYTHONUNBUFFERED: "1"
           WP_SITE: https://tasisatesatarkhan.ir
           WP_USER: ${{ secrets.WP_USER }}
           WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
@@ -43,4 +45,4 @@ jobs:
           YOUTUBE_URL: ${{ inputs.youtube_url }}
           SHORTS_URL: ${{ inputs.shorts_url }}
           PUBLISH: ${{ inputs.publish }}
-        run: python run.py attach
+        run: python -u run.py attach
